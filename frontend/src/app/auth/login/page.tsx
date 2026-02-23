@@ -36,11 +36,22 @@ export default function LoginPage() {
                     return;
                 }
 
-                // Get profile to determine redirect
+                // Get role from JWT user_metadata first (fastest, no extra query)
+                const { data: { user } } = await supabase.auth.getUser();
+                const metaRole = user?.user_metadata?.role;
+
+                if (metaRole === "admin") {
+                    router.push("/admin");
+                    router.refresh();
+                    return;
+                }
+
+                // Fallback: check profiles table
                 const { data: profile } = await supabase
                     .from("profiles")
                     .select("role")
-                    .single();
+                    .eq("id", user?.id ?? "")
+                    .maybeSingle();
 
                 if (profile?.role === "admin") {
                     router.push("/admin");

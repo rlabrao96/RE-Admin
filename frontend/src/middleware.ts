@@ -40,18 +40,36 @@ export async function middleware(request: NextRequest) {
             redirectUrl.searchParams.set("redirect", pathname);
             return NextResponse.redirect(redirectUrl);
         }
+        return supabaseResponse;
     }
 
-    // Redirect authenticated users away from login page
-    if (user && pathname === "/auth/login") {
-        // Get user role to redirect to correct portal
+    // Determine role from JWT metadata (fast, no DB query) with DB fallback
+    const metaRole = user.user_metadata?.role as string | undefined;
+    let role = metaRole;
+
+    if (!role) {
         const { data: profile } = await supabase
             .from("profiles")
             .select("role")
             .eq("id", user.id)
-            .single();
-        const redirectPath = profile?.role === "admin" ? "/admin" : "/portal";
+            .maybeSingle();
+        role = profile?.role;
+    }
+
+    // Redirect authenticated users away from login → correct portal
+    if (pathname === "/auth/login") {
+        const redirectPath = role === "admin" ? "/admin" : "/portal";
         return NextResponse.redirect(new URL(redirectPath, request.url));
+    }
+
+    // Prevent residents from accessing /admin
+    if (pathname.startsWith("/admin") && role !== "admin") {
+        return NextResponse.redirect(new URL("/portal", request.url));
+    }
+
+    // Prevent admins from accidentally landing on /portal
+    if (pathname === "/portal" && role === "admin") {
+        return NextResponse.redirect(new URL("/admin", request.url));
     }
 
     return supabaseResponse;
