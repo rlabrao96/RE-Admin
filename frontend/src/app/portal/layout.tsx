@@ -1,4 +1,5 @@
 import { PortalSidebar } from "@/components/portal/PortalSidebar";
+import "@/app/globals.css";
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
     return (
