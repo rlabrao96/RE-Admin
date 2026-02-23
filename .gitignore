@@ -4,3 +4,22 @@ node_modules/
 .next/
 *.env
 .env.local
+
+# Logs & PIDs
+backend/backend.log
+backend/backend.pid
+frontend/frontend.log
+frontend/frontend.pid
+
+# Python cache
+**/__pycache__/
+*.pyc
+
+# Debug files
+backend/debug_summary.py
+backend/test_auth.py
+test_backend.py
+
+# Supabase CLI binary & temp
+supabase-cli
+supabase/.temp/

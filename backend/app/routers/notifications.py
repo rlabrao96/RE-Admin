@@ -35,7 +35,7 @@ async def create_notification(data: NotificationCreate, user=Depends(require_adm
         .select("id")
         .eq("id", data.building_id)
         .eq("admin_id", str(user.id))
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     if not building.data:

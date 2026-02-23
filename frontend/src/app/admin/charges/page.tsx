@@ -3,14 +3,24 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 
-interface Charge {
-    id: string;
-    unit_id: string;
-    concept: string;
+interface ChargeSummary {
+    building_id: string;
+    building_name: string;
     period: string;
-    amount_clp: number;
-    due_date: string;
-    status: "pending" | "paid" | "overdue";
+    total_amount: number;
+    paid_count: number;
+    total_count: number;
+    percent_paid: number;
+}
+
+interface Building {
+    id: string;
+    name: string;
+}
+
+interface ModifyModal {
+    building_id: string;
+    period: string;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -19,77 +29,161 @@ function formatCLP(amount: number) {
     return `$${amount.toLocaleString("es-CL")}`;
 }
 
-const STATUS_LABELS: Record<string, { label: string; className: string }> = {
-    pending: { label: "Pendiente", className: "badge-warning" },
-    paid: { label: "Pagado", className: "badge-success" },
-    overdue: { label: "Vencido", className: "badge-danger" },
-};
-
 export default function ChargesPage() {
-    const [charges, setCharges] = useState<Charge[]>([]);
+    const [summaries, setSummaries] = useState<ChargeSummary[]>([]);
+    const [buildings, setBuildings] = useState<Building[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filterStatus, setFilterStatus] = useState("");
+    const [filterBuilding, setFilterBuilding] = useState("");
     const [filterPeriod, setFilterPeriod] = useState("");
 
-    const fetchCharges = useCallback(async () => {
+    // Modify modal state
+    const [modifyModal, setModifyModal] = useState<ModifyModal | null>(null);
+    const [modifyLoading, setModifyLoading] = useState(false);
+    const [modifyForm, setModifyForm] = useState({
+        new_base_amount: "",
+        new_due_date: "",
+        new_concept: "",
+    });
+
+    const fetchBuildings = useCallback(async () => {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
+        const res = await fetch(`${API_URL}/api/buildings/`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (res.ok) setBuildings(await res.json());
+    }, []);
+
+    const fetchSummaries = useCallback(async () => {
         setLoading(true);
         const supabase = createClient();
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
 
-        const params = new URLSearchParams();
-        if (filterStatus) params.set("status", filterStatus);
-        if (filterPeriod) params.set("period", filterPeriod);
-
-        const res = await fetch(`${API_URL}/api/charges/?${params}`, {
+        const res = await fetch(`${API_URL}/api/charges/summary`, {
             headers: { Authorization: `Bearer ${session.access_token}` },
         });
-        if (res.ok) setCharges(await res.json());
+        if (res.ok) setSummaries(await res.json());
         setLoading(false);
-    }, [filterStatus, filterPeriod]);
+    }, []);
 
-    useEffect(() => { fetchCharges(); }, [fetchCharges]);
+    useEffect(() => {
+        fetchBuildings();
+        fetchSummaries();
+    }, [fetchBuildings, fetchSummaries]);
 
-    // Summary stats
-    const totalPending = charges.filter(c => c.status === "pending").reduce((s, c) => s + c.amount_clp, 0);
-    const totalPaid = charges.filter(c => c.status === "paid").reduce((s, c) => s + c.amount_clp, 0);
-    const totalOverdue = charges.filter(c => c.status === "overdue").reduce((s, c) => s + c.amount_clp, 0);
+    const handleDelete = async (building_id: string, period: string) => {
+        if (!confirm(`¿Estás seguro de que deseas eliminar TODOS los cobros de ${period}? Esta acción no se puede deshacer.`)) return;
+
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
+        const res = await fetch(`${API_URL}/api/charges/bulk-delete?building_id=${building_id}&period=${period}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+
+        if (res.ok) {
+            fetchSummaries();
+        } else {
+            const err = await res.json();
+            alert(err.detail || "Error al eliminar");
+        }
+    };
+
+    const openModifyModal = (building_id: string, period: string) => {
+        setModifyModal({ building_id, period });
+        setModifyForm({ new_base_amount: "", new_due_date: "", new_concept: "" });
+    };
+
+    const handleModify = async () => {
+        if (!modifyModal) return;
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
+        setModifyLoading(true);
+        const body: Record<string, string | number> = {
+            building_id: modifyModal.building_id,
+            period: modifyModal.period,
+        };
+        if (modifyForm.new_base_amount) body.new_base_amount = parseInt(modifyForm.new_base_amount);
+        if (modifyForm.new_due_date) body.new_due_date = modifyForm.new_due_date;
+        if (modifyForm.new_concept) body.new_concept = modifyForm.new_concept;
+
+        const res = await fetch(`${API_URL}/api/charges/bulk-modify`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${session.access_token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        });
+
+        setModifyLoading(false);
+        if (res.ok) {
+            setModifyModal(null);
+            fetchSummaries();
+        } else {
+            const err = await res.json();
+            alert(err.detail || "Error al modificar");
+        }
+    };
+
+    const filteredSummaries = summaries.filter(s => {
+        if (filterBuilding && s.building_id !== filterBuilding) return false;
+        if (filterPeriod && !s.period.includes(filterPeriod)) return false;
+        return true;
+    });
+
+    const totalAmount = filteredSummaries.reduce((s, item) => s + item.total_amount, 0);
+    const totalPaidCount = filteredSummaries.reduce((s, item) => s + item.paid_count, 0);
+    const totalCount = filteredSummaries.reduce((s, item) => s + item.total_count, 0);
 
     return (
         <div>
             <div className="page-header">
                 <div>
                     <h1 className="page-title">Gastos Comunes</h1>
-                    <p className="page-subtitle">Gestiona los cobros mensuales de todas las unidades</p>
+                    <p className="page-subtitle">Gestiona los cobros agrupados por edificio y período</p>
                 </div>
                 <a href="/admin/charges/generate" className="btn btn-primary">
-                    <span>📋</span> Generar Cobros del Mes
+                    <span>📋</span> Generar Cobros
                 </a>
             </div>
 
-            {/* Summary */}
+            {/* Summary Stats */}
             <div className="stats-grid" style={{ marginBottom: "1.5rem" }}>
                 <div className="stat-card">
-                    <span className="stat-label">Pendiente de Cobro</span>
-                    <span className="stat-value" style={{ fontSize: "1.5rem" }}>{formatCLP(totalPending)}</span>
+                    <span className="stat-label">Total en Cobro</span>
+                    <span className="stat-value">{formatCLP(totalAmount)}</span>
                 </div>
                 <div className="stat-card">
-                    <span className="stat-label">Recaudado</span>
-                    <span className="stat-value" style={{ fontSize: "1.5rem", color: "var(--color-success)" }}>{formatCLP(totalPaid)}</span>
-                </div>
-                <div className="stat-card">
-                    <span className="stat-label">Vencido</span>
-                    <span className="stat-value" style={{ fontSize: "1.5rem", color: "var(--color-danger)" }}>{formatCLP(totalOverdue)}</span>
+                    <span className="stat-label">Unidades al Día</span>
+                    <span className="stat-value" style={{ color: "var(--color-success)" }}>
+                        {totalPaidCount} / {totalCount}
+                    </span>
+                    <span className="stat-sublabel">
+                        {totalCount > 0 ? Math.round((totalPaidCount / totalCount) * 100) : 0}% de recaudación
+                    </span>
                 </div>
             </div>
 
             {/* Filters */}
             <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1rem" }}>
-                <select className="form-input" style={{ width: "auto" }} value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
-                    <option value="">Todos los estados</option>
-                    <option value="pending">Pendiente</option>
-                    <option value="paid">Pagado</option>
-                    <option value="overdue">Vencido</option>
+                <select
+                    className="form-input"
+                    style={{ width: "auto", minWidth: "200px" }}
+                    value={filterBuilding}
+                    onChange={e => setFilterBuilding(e.target.value)}
+                >
+                    <option value="">Todos los edificios</option>
+                    {buildings.map(b => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
                 </select>
                 <input
                     className="form-input"
@@ -97,11 +191,10 @@ export default function ChargesPage() {
                     style={{ width: "auto" }}
                     value={filterPeriod}
                     onChange={e => setFilterPeriod(e.target.value)}
-                    placeholder="Período"
                 />
-                {(filterStatus || filterPeriod) && (
-                    <button className="btn btn-ghost" onClick={() => { setFilterStatus(""); setFilterPeriod(""); }}>
-                        Limpiar filtros
+                {(filterBuilding || filterPeriod) && (
+                    <button className="btn btn-ghost" onClick={() => { setFilterBuilding(""); setFilterPeriod(""); }}>
+                        Limpiar
                     </button>
                 )}
             </div>
@@ -109,42 +202,143 @@ export default function ChargesPage() {
             {/* Table */}
             <div className="table-wrapper">
                 {loading ? (
-                    <p style={{ padding: "2rem", textAlign: "center", color: "var(--color-gray-500)" }}>Cargando...</p>
-                ) : charges.length === 0 ? (
+                    <p style={{ padding: "2rem", textAlign: "center", color: "var(--color-gray-500)" }}>Cargando resumen...</p>
+                ) : filteredSummaries.length === 0 ? (
                     <div style={{ padding: "3rem", textAlign: "center" }}>
                         <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📋</div>
-                        <p style={{ color: "var(--color-gray-500)" }}>No hay cobros. Genera los cobros del mes.</p>
+                        <p style={{ color: "var(--color-gray-500)" }}>No se encontraron cobros para los filtros seleccionados.</p>
                     </div>
                 ) : (
                     <table>
                         <thead>
                             <tr>
-                                <th>Concepto</th>
+                                <th>Edificio</th>
                                 <th>Período</th>
-                                <th>Monto</th>
-                                <th>Vencimiento</th>
-                                <th>Estado</th>
+                                <th>Monto Total</th>
+                                <th>Progreso</th>
+                                <th style={{ textAlign: "right" }}>Acciones</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {charges.map((charge) => {
-                                const statusInfo = STATUS_LABELS[charge.status] ?? { label: charge.status, className: "badge-primary" };
-                                return (
-                                    <tr key={charge.id}>
-                                        <td>{charge.concept}</td>
-                                        <td>{charge.period}</td>
-                                        <td style={{ fontWeight: 600 }}>{formatCLP(charge.amount_clp)}</td>
-                                        <td>{new Date(charge.due_date).toLocaleDateString("es-CL")}</td>
-                                        <td>
-                                            <span className={`badge ${statusInfo.className}`}>{statusInfo.label}</span>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
+                            {filteredSummaries.map((s) => (
+                                <tr key={`${s.building_id}-${s.period}`}>
+                                    <td style={{ fontWeight: 500 }}>{s.building_name}</td>
+                                    <td>{s.period}</td>
+                                    <td style={{ fontWeight: 600 }}>{formatCLP(s.total_amount)}</td>
+                                    <td>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                            <div style={{ width: "80px", height: "8px", borderRadius: "4px", backgroundColor: "#e5e7eb", overflow: "hidden" }}>
+                                                <div style={{
+                                                    width: `${s.percent_paid}%`,
+                                                    height: "100%",
+                                                    backgroundColor: s.percent_paid === 100 ? "var(--color-success)" : "var(--color-primary)"
+                                                }} />
+                                            </div>
+                                            <span style={{ fontSize: "0.85rem", color: "var(--color-gray-600)" }}>
+                                                {s.paid_count}/{s.total_count}
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td style={{ textAlign: "right" }}>
+                                        <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                                            <a
+                                                href={`/admin/charges/detail?building_id=${s.building_id}&period=${s.period}`}
+                                                className="btn btn-sm btn-ghost"
+                                                title="Ver detalle por unidad"
+                                            >
+                                                👁️ Ver
+                                            </a>
+                                            <button
+                                                className="btn btn-sm btn-ghost"
+                                                title="Modificar grupo"
+                                                onClick={() => openModifyModal(s.building_id, s.period)}
+                                                disabled={s.paid_count > 0}
+                                            >
+                                                ✏️
+                                            </button>
+                                            <button
+                                                className="btn btn-sm btn-ghost"
+                                                title="Eliminar grupo"
+                                                onClick={() => handleDelete(s.building_id, s.period)}
+                                                disabled={s.paid_count > 0}
+                                                style={{ color: s.paid_count > 0 ? undefined : "var(--color-danger)" }}
+                                            >
+                                                🗑️
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
                         </tbody>
                     </table>
                 )}
             </div>
+
+            {/* Modify Modal */}
+            {modifyModal && (
+                <div style={{
+                    position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)",
+                    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000
+                }}>
+                    <div style={{
+                        background: "var(--color-surface)", borderRadius: "0.75rem",
+                        padding: "2rem", minWidth: "380px", maxWidth: "480px", width: "100%",
+                        boxShadow: "0 20px 60px rgba(0,0,0,0.3)"
+                    }}>
+                        <h2 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "0.25rem" }}>
+                            Modificar Grupo de Cobros
+                        </h2>
+                        <p style={{ color: "var(--color-gray-500)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
+                            Período {modifyModal.period} — solo se pueden modificar cobros sin pagos registrados.
+                        </p>
+
+                        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                            <div>
+                                <label className="form-label">Nuevo monto base (CLP)</label>
+                                <input
+                                    className="form-input"
+                                    type="number"
+                                    placeholder="Ej: 50000 (se multiplica por alícuota)"
+                                    value={modifyForm.new_base_amount}
+                                    onChange={e => setModifyForm(f => ({ ...f, new_base_amount: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <label className="form-label">Nueva fecha de vencimiento</label>
+                                <input
+                                    className="form-input"
+                                    type="date"
+                                    value={modifyForm.new_due_date}
+                                    onChange={e => setModifyForm(f => ({ ...f, new_due_date: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <label className="form-label">Nuevo concepto</label>
+                                <input
+                                    className="form-input"
+                                    type="text"
+                                    placeholder="Ej: Gasto Común Revisado"
+                                    value={modifyForm.new_concept}
+                                    onChange={e => setModifyForm(f => ({ ...f, new_concept: e.target.value }))}
+                                />
+                            </div>
+                        </div>
+
+                        <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.5rem", justifyContent: "flex-end" }}>
+                            <button className="btn btn-ghost" onClick={() => setModifyModal(null)} disabled={modifyLoading}>
+                                Cancelar
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={handleModify}
+                                disabled={modifyLoading || (!modifyForm.new_base_amount && !modifyForm.new_due_date && !modifyForm.new_concept)}
+                            >
+                                {modifyLoading ? "Guardando..." : "Guardar cambios"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

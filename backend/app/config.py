@@ -1,5 +1,4 @@
-from pydantic_settings import BaseSettings
-
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     SUPABASE_URL: str = ""
@@ -10,8 +9,7 @@ class Settings(BaseSettings):
     FINTOC_SECRET_KEY: str = ""
     ENVIRONMENT: str = "development"  # development | production
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
 settings = Settings()

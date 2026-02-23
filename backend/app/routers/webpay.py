@@ -45,7 +45,7 @@ async def init_transaction(data: WebpayInitRequest, user=Depends(require_residen
         .select("id, unit_id, amount_clp, status")
         .eq("id", data.charge_id)
         .eq("unit_id", resident_data["unit_id"])
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     if not charge.data:
@@ -123,7 +123,7 @@ async def confirm_transaction(data: WebpayConfirmRequest, user=Depends(require_r
         supabase.table("payments")
         .select("charge_id")
         .eq("external_ref", data.token_ws)
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     if payment.data:

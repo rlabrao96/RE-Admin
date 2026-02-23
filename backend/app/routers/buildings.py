@@ -14,6 +14,12 @@ router = APIRouter(prefix="/api/buildings", tags=["buildings"])
 
 @router.get("/")
 async def list_buildings(user=Depends(require_admin)):
+    # We need to use the user's token to satisfy RLS since we don't have a service_role key
+    # Token should be in user.token (I will update require_admin to include it)
+    token = getattr(user, "token", None)
+    if token:
+        supabase.postgrest.auth(token)
+        
     result = (
         supabase.table("buildings")
         .select("*")
@@ -42,7 +48,7 @@ async def get_building(building_id: str, user=Depends(require_admin)):
         .select("*")
         .eq("id", building_id)
         .eq("admin_id", str(user.id))
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     if not result.data:
@@ -60,7 +66,7 @@ async def update_building(
         .select("id")
         .eq("id", building_id)
         .eq("admin_id", str(user.id))
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     if not existing.data:
@@ -81,7 +87,7 @@ async def delete_building(building_id: str, user=Depends(require_admin)):
         .select("id")
         .eq("id", building_id)
         .eq("admin_id", str(user.id))
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     if not existing.data:

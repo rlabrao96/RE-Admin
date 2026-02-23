@@ -44,7 +44,7 @@ async def record_manual_payment(data: ManualPaymentCreate, user=Depends(require_
         supabase.table("charges")
         .select("id, unit_id, status")
         .eq("id", str(data.charge_id))
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     if not charge.data:
@@ -56,7 +56,7 @@ async def record_manual_payment(data: ManualPaymentCreate, user=Depends(require_
         .select("id")
         .eq("unit_id", charge.data["unit_id"])
         .eq("status", "active")
-        .maybeSingle()
+        .maybe_single()
         .execute()
     )
     resident_id = resident.data["id"] if resident.data else None
