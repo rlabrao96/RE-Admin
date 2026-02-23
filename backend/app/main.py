@@ -19,10 +19,12 @@ app.add_middleware(
 
 from app.routers.buildings import router as buildings_router, router_floors
 from app.routers.charges import router as charges_router
+from app.routers.payments import router as payments_router
 
 app.include_router(buildings_router)
 app.include_router(router_floors)
 app.include_router(charges_router)
+app.include_router(payments_router)
 
 
 @app.get("/health")
