@@ -17,6 +17,12 @@ app.add_middleware(
 )
 
 
+from app.routers.buildings import router as buildings_router, router_floors
+
+app.include_router(buildings_router)
+app.include_router(router_floors)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
