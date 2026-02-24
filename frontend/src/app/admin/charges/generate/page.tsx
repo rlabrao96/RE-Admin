@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+import { getExpenses } from "@/lib/expenses-api";
 
 interface Building { id: string; name: string }
 
@@ -25,6 +26,7 @@ export default function GenerateChargesPage() {
     const [error, setError] = useState<string | null>(null);
     const [notifying, setNotifying] = useState(false);
     const [notified, setNotified] = useState<string[]>([]); // charge ids that were notified
+    const [isCalculatedFromExpenses, setIsCalculatedFromExpenses] = useState(false);
 
     useEffect(() => {
         // Set sensible default due_date: last day of the selected month
@@ -47,6 +49,31 @@ export default function GenerateChargesPage() {
         }
         load();
     }, []);
+
+    useEffect(() => {
+        async function fetchAutoExpenses() {
+            if (form.building_id && form.period) {
+                try {
+                    const supabase = createClient();
+                    const { data: { session } } = await supabase.auth.getSession();
+                    if (!session) return;
+
+                    const data = await getExpenses(session.access_token, form.building_id, form.period);
+
+                    if (data && data.length > 0) {
+                        const total = data.reduce((sum: number, exp: any) => sum + (exp.amount_clp || 0), 0);
+                        if (total > 0) {
+                            setForm(f => ({ ...f, base_amount_clp: total.toString() }));
+                            setIsCalculatedFromExpenses(true);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to auto-fetch expenses", e);
+                }
+            }
+        }
+        fetchAutoExpenses();
+    }, [form.building_id, form.period]);
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
@@ -216,12 +243,17 @@ export default function GenerateChargesPage() {
                                 type="number"
                                 min={1}
                                 value={form.base_amount_clp}
-                                onChange={e => setForm({ ...form, base_amount_clp: e.target.value })}
+                                onChange={e => {
+                                    setForm({ ...form, base_amount_clp: e.target.value });
+                                    setIsCalculatedFromExpenses(false);
+                                }}
                                 placeholder="1500000"
                                 required
                             />
-                            <p style={{ fontSize: "0.8125rem", color: "var(--color-gray-500)", marginTop: "0.25rem" }}>
+                            <p style={{ fontSize: "0.8125rem", color: "var(--color-gray-500)", marginTop: "0.25rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
                                 Este monto se distribuye a cada unidad según su alícuota (%). Ejemplo: 1.500.000 × 3% = 45.000 para esa unidad.
+                                {isCalculatedFromExpenses && <span style={{ background: "var(--color-success)", color: "white", padding: "2px 6px", borderRadius: "12px", fontSize: "0.7rem", fontWeight: 600 }}>Calculado desde Gastos Integrados</span>}
+                                {!isCalculatedFromExpenses && form.base_amount_clp !== "" && <span style={{ background: "var(--color-gray-200)", color: "var(--color-gray-700)", padding: "2px 6px", borderRadius: "12px", fontSize: "0.7rem", fontWeight: 600 }}>Modificado manualmente</span>}
                             </p>
                         </div>
 

@@ -8,6 +8,7 @@ interface ChargeSummary {
     building_name: string;
     period: string;
     total_amount: number;
+    paid_amount: number;
     paid_count: number;
     total_count: number;
     percent_paid: number;
@@ -226,17 +227,22 @@ export default function ChargesPage() {
                                     <td>{s.period}</td>
                                     <td style={{ fontWeight: 600 }}>{formatCLP(s.total_amount)}</td>
                                     <td>
-                                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                                            <div style={{ width: "80px", height: "8px", borderRadius: "4px", backgroundColor: "#e5e7eb", overflow: "hidden" }}>
-                                                <div style={{
-                                                    width: `${s.percent_paid}%`,
-                                                    height: "100%",
-                                                    backgroundColor: s.percent_paid === 100 ? "var(--color-success)" : "var(--color-primary)"
-                                                }} />
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                                            <div style={{ fontSize: "0.85rem", fontWeight: 500, color: "var(--color-primary)" }}>
+                                                {formatCLP(s.paid_amount)} / {formatCLP(s.total_amount)}
                                             </div>
-                                            <span style={{ fontSize: "0.85rem", color: "var(--color-gray-600)" }}>
-                                                {s.paid_count}/{s.total_count}
-                                            </span>
+                                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                                <div style={{ width: "80px", height: "8px", borderRadius: "4px", backgroundColor: "#e5e7eb", overflow: "hidden" }}>
+                                                    <div style={{
+                                                        width: `${s.percent_paid}%`,
+                                                        height: "100%",
+                                                        backgroundColor: s.percent_paid === 100 ? "var(--color-success)" : "var(--color-primary)"
+                                                    }} />
+                                                </div>
+                                                <span style={{ fontSize: "0.85rem", color: "var(--color-gray-600)" }}>
+                                                    {s.paid_count}/{s.total_count} unidades
+                                                </span>
+                                            </div>
                                         </div>
                                     </td>
                                     <td style={{ textAlign: "right" }}>

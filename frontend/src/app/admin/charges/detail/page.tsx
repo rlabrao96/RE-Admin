@@ -60,13 +60,17 @@ function ChargesDetailContent() {
         if (res.ok) {
             const data = await res.json();
             setCharges(data);
-            if (data.length > 0) {
-                // Get building name from the first charge's nested data
-                // In our list_charges join, it's units -> floors -> buildings -> name
-                const bName = data[0].units?.floors?.buildings?.name;
-                if (bName) setBuildingName(bName);
-            }
         }
+
+        // Fetch building name separately to ensure it displays even with 0 charges
+        const bRes = await fetch(`${API_URL}/api/buildings/${buildingId}`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (bRes.ok) {
+            const bData = await bRes.json();
+            setBuildingName(bData.name);
+        }
+
         setLoading(false);
     }, [buildingId, period]);
 
@@ -140,6 +144,14 @@ function ChargesDetailContent() {
                                 );
                             })}
                         </tbody>
+                        <tfoot>
+                            <tr style={{ background: "var(--color-gray-100)", borderTop: "2px solid var(--color-gray-200)" }}>
+                                <td colSpan={2} style={{ textAlign: "right", fontWeight: 700 }}>Total a recaudar:</td>
+                                <td colSpan={4} style={{ fontWeight: 700, color: "var(--color-primary)" }}>
+                                    {formatCLP(charges.reduce((sum, c) => sum + c.amount_clp, 0))}
+                                </td>
+                            </tr>
+                        </tfoot>
                     </table>
                 )}
             </div>

@@ -17,18 +17,28 @@ async def list_charges(
 ):
     """List all charges for buildings managed by the admin."""
     query = supabase.table("charges").select(
-        "*, units(number, floor_id, floors(building_id, buildings(name, admin_id)), residents(is_owner, profiles(full_name, email)))"
+        "*, units!inner(number, floor_id, floors!inner(building_id, buildings!inner(name, admin_id)), residents(is_owner, profiles(full_name, email)))"
     )
     if period:
         query = query.eq("period", period)
     if status:
         query = query.eq("status", status)
+    if building_id:
+        query = query.eq("units.floors.building_id", building_id)
+        
     result = query.execute()
-    # Filter to admin's buildings
-    return [
-        c for c in result.data
-        if c.get("units", {}).get("floors", {}).get("buildings", {}).get("admin_id") == str(user.id)
-    ]
+    
+    # Filter to admin's buildings (as fallback)
+    valid_charges = []
+    for c in result.data:
+        b_admin = c.get("units", {}).get("floors", {}).get("buildings", {}).get("admin_id")
+        if b_admin == str(user.id):
+            valid_charges.append(c)
+            
+    # Sort by unit number alphabetically
+    valid_charges.sort(key=lambda x: str(x.get("units", {}).get("number", "")))
+    
+    return valid_charges
 
 
 @router.get("/summary")
@@ -74,14 +84,17 @@ async def get_charges_summary(
                 "building_name": b_name,
                 "period": period,
                 "total_amount": 0,
+                "paid_amount": 0,
                 "paid_count": 0,
                 "total_count": 0
             }
         
-        summary_map[key]["total_amount"] += int(c.get("amount_clp") or 0)
+        amount = int(c.get("amount_clp") or 0)
+        summary_map[key]["total_amount"] += amount
         summary_map[key]["total_count"] += 1
         if c.get("status") == "paid":
             summary_map[key]["paid_count"] += 1
+            summary_map[key]["paid_amount"] += amount
             
     # Calculate percentages and prepare the final list
     final_summary = []
