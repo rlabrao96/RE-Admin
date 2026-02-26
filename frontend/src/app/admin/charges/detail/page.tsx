@@ -1,30 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, Suspense, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useBuilding } from "@/hooks/api/useBuilding";
+import { useCharges, useUpdateChargeStatus, Charge } from "@/hooks/api/useCharges";
+import { useChargeSummaries } from "@/hooks/api/useChargeSummaries";
 
-interface Charge {
-    id: string;
-    unit_id: string;
-    concept: string;
-    period: string;
-    amount_clp: number;
-    due_date: string;
-    status: "pending" | "paid" | "overdue";
-    paid_at?: string;
-    amount_utm?: number;
-    units: {
-        number: string;
-        residents: Array<{
-            is_owner: boolean;
-            profiles: {
-                full_name: string;
-                email: string;
-            }
-        }>;
-    }
-}
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -44,9 +26,13 @@ function ChargesDetailContent() {
     const buildingId = searchParams.get("building_id");
     const period = searchParams.get("period");
 
-    const [charges, setCharges] = useState<Charge[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [buildingName, setBuildingName] = useState("");
+    const { data: building } = useBuilding(buildingId);
+    const { data: charges = [], isLoading: chargesLoading, refetch: refetchCharges } = useCharges(buildingId, period);
+    const { data: summaries = [] } = useChargeSummaries();
+
+    const updateStatus = useUpdateChargeStatus();
+
+    const buildingName = building?.name || "";
 
     // Modal state
     const [showFineModal, setShowFineModal] = useState(false);
@@ -61,107 +47,21 @@ function ChargesDetailContent() {
         use_utm: true
     });
     const [creatingFine, setCreatingFine] = useState(false);
-    const [isArchived, setIsArchived] = useState(false);
-
-    const fetchData = useCallback(async () => {
-        if (!buildingId || !period) return;
-        setLoading(true);
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-
-        // Fetch all summaries for this building to find the latest period
-        const resSum = await fetch(`${API_URL}/api/charges/summary`, {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (resSum.ok) {
-            const summaryData = await resSum.json();
-            const bSummaries = summaryData.filter((s: any) => String(s.building_id) === String(buildingId));
-            if (bSummaries.length > 0) {
-                const latest = bSummaries.reduce((max: string, s: any) => s.period > max ? s.period : max, "");
-                setIsArchived(period < latest);
-            }
+    const isArchived = useMemo(() => {
+        if (!buildingId || !period || summaries.length === 0) return false;
+        const bSummaries = summaries.filter((s: any) => String(s.building_id) === String(buildingId));
+        if (bSummaries.length > 0) {
+            const latest = bSummaries.reduce((max: string, s: any) => s.period > max ? s.period : max, "");
+            return period < latest;
         }
+        return false;
+    }, [summaries, buildingId, period]);
 
-        // Fetch current period charges
-        const resCurr = await fetch(`${API_URL}/api/charges/?building_id=${buildingId}&period=${period}`, {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-
-        // Fetch ALL past charges for this building to accurately reconstruct past debt
-        const resPast = await fetch(`${API_URL}/api/charges/?building_id=${buildingId}`, {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-
-        if (resCurr.ok) {
-            const dataCurr = await resCurr.json();
-            let finalCharges = [...dataCurr];
-
-            if (resPast.ok) {
-                const dataPast = await resPast.json();
-
-                // Helper: A past charge counts as debt for the CURRENT viewed period if it 
-                // was unpaid at the time this period started.
-                const isPendingForPeriod = (c: any, targetPeriod: string) => {
-                    if (c.period >= targetPeriod) return false;
-                    if (c.status === "pending") return true;
-                    if (c.status === "paid" && c.paid_at) {
-                        const paidMonth = c.paid_at.substring(0, 7); // Extracts "YYYY-MM"
-                        // If it was paid in the target period or later, it was still pending when target period began
-                        return paidMonth >= targetPeriod;
-                    }
-                    return false;
-                };
-
-                const existingIds = new Set(dataCurr.map((c: any) => c.id));
-                const activePastCharges = dataPast.filter((c: any) =>
-                    !existingIds.has(c.id) && isPendingForPeriod(c, period)
-                );
-                finalCharges = [...finalCharges, ...activePastCharges];
-            }
-
-            setCharges(finalCharges);
-        }
-
-        // Fetch building name separately
-        const bRes = await fetch(`${API_URL}/api/buildings/${buildingId}`, {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (bRes.ok) {
-            const bData = await bRes.json();
-            setBuildingName(bData.name);
-        }
-
-        setLoading(false);
-    }, [buildingId, period]);
-
-    useEffect(() => { fetchData(); }, [fetchData]);
+    const loading = chargesLoading;
 
     async function handleTogglePaid(chargeIds: string[], currentStatus: string) {
-        setLoading(true);
-        try {
-            const supabase = createClient();
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
-
-            const newStatus = currentStatus === "paid" ? "pending" : "paid";
-
-            // Update each charge in parallel
-            await Promise.all(
-                chargeIds.map(id =>
-                    fetch(`${API_URL}/api/charges/${id}?status=${newStatus}&context_period=${period}`, {
-                        method: "PUT",
-                        headers: { Authorization: `Bearer ${session.access_token}` },
-                    })
-                )
-            );
-
-            await fetchData();
-        } catch (err) {
-            console.error("Error toggling payment status:", err);
-        } finally {
-            setLoading(false);
-        }
+        const newStatus = currentStatus === "paid" ? "pending" : "paid";
+        updateStatus.mutate({ ids: chargeIds, newStatus, period: period! });
     }
 
     async function handleOpenFineModal() {
@@ -230,7 +130,7 @@ function ChargesDetailContent() {
         setCreatingFine(false);
         if (res.ok) {
             setShowFineModal(false);
-            fetchData();
+            refetchCharges();
         } else {
             alert("Error al crear la multa");
         }
