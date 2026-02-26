@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/admin/Sidebar";
+import QueryProvider from "@/providers/QueryProvider";
 import "@/app/globals.css";
 
 export default function AdminLayout({
@@ -7,9 +8,11 @@ export default function AdminLayout({
     children: React.ReactNode;
 }) {
     return (
-        <div className="admin-layout">
-            <Sidebar />
-            <main className="admin-content">{children}</main>
-        </div>
+        <QueryProvider>
+            <div className="admin-layout">
+                <Sidebar />
+                <main className="admin-content">{children}</main>
+            </div>
+        </QueryProvider>
     );
 }

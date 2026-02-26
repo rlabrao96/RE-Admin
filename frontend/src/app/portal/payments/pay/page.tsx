@@ -12,6 +12,7 @@ function PayForm() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const chargeId = searchParams.get("charge_id") ?? "";
+    const chargeIdsStr = searchParams.get("charge_ids") ?? "";
     const amount = parseInt(searchParams.get("amount") ?? "0", 10);
 
     const [method, setMethod] = useState<"webpay" | "transferencia">("webpay");

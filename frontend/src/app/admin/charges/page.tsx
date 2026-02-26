@@ -140,9 +140,20 @@ export default function ChargesPage() {
         return true;
     });
 
-    const totalAmount = filteredSummaries.reduce((s, item) => s + item.total_amount, 0);
-    const totalPaidCount = filteredSummaries.reduce((s, item) => s + item.paid_count, 0);
-    const totalCount = filteredSummaries.reduce((s, item) => s + item.total_count, 0);
+    // To prevent historical data from inflating the top summary cards (like showing 2/8 units instead of 0/4),
+    // we only sum statistics for the LATEST period of each building that matches the filters.
+    const latestSummariesByBuilding = Object.values(
+        filteredSummaries.reduce((acc, curr) => {
+            if (!acc[curr.building_id] || curr.period > acc[curr.building_id].period) {
+                acc[curr.building_id] = curr;
+            }
+            return acc;
+        }, {} as Record<string, ChargeSummary>)
+    );
+
+    const totalAmount = latestSummariesByBuilding.reduce((s, item) => s + item.total_amount, 0);
+    const totalPaidCount = latestSummariesByBuilding.reduce((s, item) => s + item.paid_count, 0);
+    const totalCount = latestSummariesByBuilding.reduce((s, item) => s + item.total_count, 0);
 
     return (
         <div>
@@ -246,7 +257,13 @@ export default function ChargesPage() {
                                         </div>
                                     </td>
                                     <td style={{ textAlign: "right" }}>
-                                        <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", justifyContent: "flex-end" }}>
+                                            {/* Check if archived (older than building's latest period) */}
+                                            {(latestSummariesByBuilding.find(ls => ls.building_id === s.building_id)?.period || "") > s.period && (
+                                                <span className="badge" style={{ background: "var(--color-gray-100)", color: "var(--color-gray-600)", border: "1px solid var(--color-gray-200)", fontSize: "0.6rem", padding: "0.15rem 0.4rem" }}>
+                                                    ARCHIVO
+                                                </span>
+                                            )}
                                             <a
                                                 href={`/admin/charges/detail?building_id=${s.building_id}&period=${s.period}`}
                                                 className="btn btn-sm btn-ghost"

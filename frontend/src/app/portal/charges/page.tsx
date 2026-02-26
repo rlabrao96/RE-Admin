@@ -48,35 +48,81 @@ export default async function PortalChargesPage() {
                 </div>
             </div>
 
-            {/* Pending */}
-            {pending.length > 0 && (
-                <div style={{ marginBottom: "2rem" }}>
-                    <h2 style={{ fontWeight: 600, fontSize: "0.9375rem", marginBottom: "0.75rem", color: "var(--color-danger)" }}>
-                        ⚠️ Pendiente de Pago
-                    </h2>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "0.625rem" }}>
-                        {pending.map((c: { id: string; concept: string; period: string; amount_clp: number; due_date: string; status: string }) => (
-                            <div key={c.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            {/* Pending Consolidation */}
+            {pending.length > 0 && (() => {
+                const now = new Date();
+                const currentPeriod = now.toISOString().slice(0, 7);
+
+                const summary = pending.reduce((acc: any, c: any) => {
+                    const concept = (c.concept || "").toLowerCase();
+                    const isCurrent = c.period === currentPeriod;
+
+                    if (concept.includes("multa") || concept.includes("individual")) {
+                        acc.multas += c.amount_clp;
+                    } else if (concept.includes("interes") || concept.includes("interés")) {
+                        acc.intereses += c.amount_clp;
+                    } else if (isCurrent) {
+                        acc.gastoComun += c.amount_clp;
+                    } else {
+                        acc.gastosPendientes += c.amount_clp;
+                    }
+                    acc.total += c.amount_clp;
+                    acc.ids.push(c.id);
+                    return acc;
+                }, { gastoComun: 0, gastosPendientes: 0, multas: 0, intereses: 0, total: 0, ids: [] });
+
+                return (
+                    <div style={{ marginBottom: "2rem" }}>
+                        <h2 style={{ fontWeight: 600, fontSize: "0.9375rem", marginBottom: "0.75rem", color: "var(--color-danger)" }}>
+                            ⚠️ Saldo Pendiente de Pago
+                        </h2>
+                        <div className="card" style={{ padding: "1.5rem" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1.5rem" }}>
                                 <div>
-                                    <div style={{ fontWeight: 600 }}>{c.concept}</div>
-                                    <div style={{ fontSize: "0.8125rem", color: "var(--color-gray-500)", marginTop: "0.25rem" }}>
-                                        Período: {c.period} · Vence: {new Date(c.due_date).toLocaleDateString("es-CL")}
-                                    </div>
+                                    <div style={{ fontSize: "0.875rem", color: "var(--color-gray-500)", marginBottom: "0.25rem" }}>Total a Pagar</div>
+                                    <div style={{ fontSize: "2rem", fontWeight: 700, color: "var(--color-primary)" }}>{formatCLP(summary.total)}</div>
                                 </div>
-                                <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-                                    <strong style={{ fontSize: "1.125rem" }}>{formatCLP(c.amount_clp)}</strong>
-                                    <a
-                                        href={`/portal/payments/pay?charge_id=${c.id}&amount=${c.amount_clp}`}
-                                        className="btn btn-primary"
-                                    >
-                                        💳 Pagar
-                                    </a>
+                                <a
+                                    href={`/portal/payments/pay?charge_id=${summary.ids[0]}&charge_ids=${summary.ids.join(",")}&amount=${summary.total}`}
+                                    className="btn btn-primary btn-lg"
+                                >
+                                    💳 Pagar Todo
+                                </a>
+                            </div>
+
+                            <div style={{ borderTop: "1px solid var(--color-gray-100)", paddingTop: "1rem" }}>
+                                <div style={{ fontSize: "0.875rem", fontWeight: 600, marginBottom: "0.75rem" }}>Desglose:</div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                                    {summary.gastoComun > 0 && (
+                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.875rem" }}>
+                                            <span>Gasto Común ({currentPeriod})</span>
+                                            <span>{formatCLP(summary.gastoComun)}</span>
+                                        </div>
+                                    )}
+                                    {summary.gastosPendientes > 0 && (
+                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.875rem", color: "var(--color-gray-600)" }}>
+                                            <span>Deuda Anterior</span>
+                                            <span>{formatCLP(summary.gastosPendientes)}</span>
+                                        </div>
+                                    )}
+                                    {summary.multas > 0 && (
+                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.875rem", color: "var(--color-warning)" }}>
+                                            <span>Multas Acumuladas</span>
+                                            <span>{formatCLP(summary.multas)}</span>
+                                        </div>
+                                    )}
+                                    {summary.intereses > 0 && (
+                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.875rem", color: "var(--color-danger)" }}>
+                                            <span>Intereses por Mora</span>
+                                            <span>{formatCLP(summary.intereses)}</span>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-                        ))}
+                        </div>
                     </div>
-                </div>
-            )}
+                );
+            })()}
 
             {/* History */}
             <div>

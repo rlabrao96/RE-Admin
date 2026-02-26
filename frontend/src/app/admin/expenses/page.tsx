@@ -82,7 +82,7 @@ export default function ExpensesPage() {
                 concept: e.concept,
                 amount_clp: typeof e.amount_clp === 'string' ? parseInt(e.amount_clp || "0", 10) : e.amount_clp,
                 expense_date: e.expense_date,
-                category: e.category || "General",
+                category: e.category || "Otros",
                 period: period
             }));
 
@@ -106,24 +106,76 @@ export default function ExpensesPage() {
             if (!session) return;
 
             const prevPeriod = getPreviousPeriod(period);
-            await copyExpenses(session.access_token, buildingId, prevPeriod, period);
-            fetchExpenses();
+            const prevData = await getExpenses(session.access_token, buildingId, prevPeriod);
+
+            if (!prevData || prevData.length === 0) {
+                setError("El mes anterior no tiene gastos registrados para copiar.");
+            } else {
+                const copiedRows = prevData.map((exp: Expense) => ({
+                    concept: exp.concept,
+                    category: exp.category,
+                    amount_clp: exp.amount_clp,
+                    expense_date: new Date().toISOString().slice(0, 10),
+                    period: period
+                }));
+                setExpenses(copiedRows);
+            }
         } catch (err) {
             console.error(err);
             setError("Error al copiar mes anterior");
+        } finally {
             setLoading(false);
         }
     };
 
-    const addEmptyRows = (count: number = 8) => {
+    const addDefaultRows = () => {
+        const defaultConcepts = [
+            { concept: "Agua áreas comunes", category: "Servicios Básicos" },
+            { concept: "Luz pasillos y áreas comunes", category: "Servicios Básicos" },
+            { concept: "Gas calderas", category: "Servicios Básicos" },
+            { concept: "Sueldos Conserjería", category: "Remuneraciones" },
+            { concept: "Honorarios Administración", category: "Administración" },
+            { concept: "Software EdificioApp", category: "Administración" },
+            { concept: "Mantención Ascensores", category: "Mantención" },
+        ];
+
+        const newRows = defaultConcepts.map(d => ({
+            concept: d.concept,
+            amount_clp: 0,
+            expense_date: new Date().toISOString().slice(0, 10),
+            category: d.category,
+            period
+        }));
+        setExpenses([...expenses, ...newRows]);
+    };
+
+    const addEmptyRows = (count: number = 1) => {
         const newRows = Array(count).fill(0).map(() => ({
             concept: "",
             amount_clp: 0,
             expense_date: new Date().toISOString().slice(0, 10),
-            category: "General",
+            category: "Otros",
             period
         }));
         setExpenses([...expenses, ...newRows]);
+    };
+
+    const clearAllRows = () => {
+        if (window.confirm("¿Seguro que deseas vaciar toda la tabla? (Los cambios no se guardarán hasta presionar Guardar)")) {
+            setExpenses([]);
+        }
+    };
+
+    const formatCurrency = (val: number | string) => {
+        if (!val) return "";
+        const num = typeof val === 'string' ? parseInt(val.replace(/\D/g, ''), 10) : val;
+        if (isNaN(num)) return "";
+        return num.toLocaleString('es-CL');
+    };
+
+    const handleAmountChange = (index: number, rawValue: string) => {
+        const numericValue = parseInt(rawValue.replace(/\D/g, ''), 10);
+        updateExpense(index, "amount_clp", isNaN(numericValue) ? 0 : numericValue);
     };
 
     const updateExpense = (index: number, field: keyof Expense, value: string | number) => {
@@ -168,11 +220,13 @@ export default function ExpensesPage() {
                     <div style={{ padding: "1.5rem", borderBottom: "1px solid var(--color-gray-200)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>Detalle de Gastos</h2>
                         <div style={{ display: "flex", gap: "0.5rem" }}>
-                            {expenses.length === 0 && (
+                            {expenses.length === 0 ? (
                                 <>
                                     <button className="btn btn-ghost" onClick={handleCopyPrevious} disabled={loading}>Copiar Mes Anterior</button>
-                                    <button className="btn btn-outline" onClick={() => addEmptyRows(8)}>Nuevo Mes (8 filas)</button>
+                                    <button className="btn btn-outline" onClick={addDefaultRows}>Cargar Conceptos Base</button>
                                 </>
+                            ) : (
+                                <button className="btn btn-ghost" onClick={clearAllRows} style={{ color: "var(--color-error)" }}>Vaciar Tabla</button>
                             )}
                             <button className="btn btn-primary" onClick={handleSave} disabled={saving || loading}>
                                 {saving ? "Guardando..." : "Guardar"}
@@ -210,20 +264,30 @@ export default function ExpensesPage() {
                                                 />
                                             </td>
                                             <td>
-                                                <input
+                                                <select
                                                     className="form-input"
                                                     style={{ padding: "0.4rem 0.6rem", height: "auto" }}
                                                     value={exp.category}
                                                     onChange={e => updateExpense(idx, "category", e.target.value)}
-                                                />
+                                                >
+                                                    <option value="Servicios Básicos">Servicios Básicos</option>
+                                                    <option value="Remuneraciones">Remuneraciones</option>
+                                                    <option value="Administración">Administración</option>
+                                                    <option value="Mantención">Mantención</option>
+                                                    <option value="Reparaciones">Reparaciones</option>
+                                                    <option value="Aseo y Limpieza">Aseo y Limpieza</option>
+                                                    <option value="Seguros">Seguros</option>
+                                                    <option value="Gastos Legales">Gastos Legales</option>
+                                                    <option value="Otros">Otros</option>
+                                                </select>
                                             </td>
                                             <td>
                                                 <input
-                                                    type="number"
+                                                    type="text"
                                                     className="form-input"
                                                     style={{ padding: "0.4rem 0.6rem", height: "auto", textAlign: "right" }}
-                                                    value={exp.amount_clp}
-                                                    onChange={e => updateExpense(idx, "amount_clp", e.target.value)}
+                                                    value={formatCurrency(exp.amount_clp)}
+                                                    onChange={e => handleAmountChange(idx, e.target.value)}
                                                 />
                                             </td>
                                             <td>

@@ -44,7 +44,8 @@ export default async function PortalDashboard() {
 
     const totalPending = (pendingCharges ?? []).reduce((s: number, c: { amount_clp: number }) => s + c.amount_clp, 0);
 
-    const unit = resident?.units as {
+    const unitsData = Array.isArray(resident?.units) ? resident?.units[0] : resident?.units;
+    const unit = unitsData as unknown as {
         number: string;
         alicuota: number;
         floors: { number: number; buildings: { name: string } };

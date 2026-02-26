@@ -50,9 +50,10 @@ export default async function PortalNotificationsPage() {
                     {(deliveries ?? []).map((d: {
                         id: string;
                         read_at: string | null;
-                        notifications: { id: string; title: string; body: string; category: string; created_at: string } | null;
+                        notifications: { id: string; title: string; body: string; category: string; created_at: string } | any;
                     }) => {
-                        const n = d.notifications;
+                        // Handle supabase array vs object bug
+                        const n = Array.isArray(d.notifications) ? d.notifications[0] : d.notifications;
                         if (!n) return null;
                         const isUnread = !d.read_at;
                         return (
