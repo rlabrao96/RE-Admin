@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useBuildings } from "@/hooks/api/useBuildings";
+import { useChargeSummaries } from "@/hooks/api/useChargeSummaries";
 
 interface ChargeSummary {
     building_id: string;
@@ -31,13 +33,13 @@ function formatCLP(amount: number) {
 }
 
 export default function ChargesPage() {
-    const [summaries, setSummaries] = useState<ChargeSummary[]>([]);
-    const [buildings, setBuildings] = useState<Building[]>([]);
-    const [loading, setLoading] = useState(true);
+    const { data: buildings = [], isLoading: buildingsLoading } = useBuildings();
+    const { data: summaries = [], isLoading: summariesLoading, refetch: fetchSummaries } = useChargeSummaries();
+
     const [filterBuilding, setFilterBuilding] = useState("");
     const [filterPeriod, setFilterPeriod] = useState("");
 
-    // Modify modal state
+    const loading = buildingsLoading || summariesLoading;
     const [modifyModal, setModifyModal] = useState<ModifyModal | null>(null);
     const [modifyLoading, setModifyLoading] = useState(false);
     const [modifyForm, setModifyForm] = useState({
@@ -46,34 +48,6 @@ export default function ChargesPage() {
         new_concept: "",
     });
 
-    const fetchBuildings = useCallback(async () => {
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-
-        const res = await fetch(`${API_URL}/api/buildings/`, {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (res.ok) setBuildings(await res.json());
-    }, []);
-
-    const fetchSummaries = useCallback(async () => {
-        setLoading(true);
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-
-        const res = await fetch(`${API_URL}/api/charges/summary`, {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (res.ok) setSummaries(await res.json());
-        setLoading(false);
-    }, []);
-
-    useEffect(() => {
-        fetchBuildings();
-        fetchSummaries();
-    }, [fetchBuildings, fetchSummaries]);
 
     const handleDelete = async (building_id: string, period: string) => {
         if (!confirm(`¿Estás seguro de que deseas eliminar TODOS los cobros de ${period}? Esta acción no se puede deshacer.`)) return;
@@ -134,7 +108,7 @@ export default function ChargesPage() {
         }
     };
 
-    const filteredSummaries = summaries.filter(s => {
+    const filteredSummaries = summaries.filter((s: ChargeSummary) => {
         if (filterBuilding && s.building_id !== filterBuilding) return false;
         if (filterPeriod && !s.period.includes(filterPeriod)) return false;
         return true;
@@ -143,7 +117,7 @@ export default function ChargesPage() {
     // To prevent historical data from inflating the top summary cards (like showing 2/8 units instead of 0/4),
     // we only sum statistics for the LATEST period of each building that matches the filters.
     const latestSummariesByBuilding = Object.values(
-        filteredSummaries.reduce((acc, curr) => {
+        filteredSummaries.reduce((acc: Record<string, ChargeSummary>, curr: ChargeSummary) => {
             if (!acc[curr.building_id] || curr.period > acc[curr.building_id].period) {
                 acc[curr.building_id] = curr;
             }
@@ -151,9 +125,9 @@ export default function ChargesPage() {
         }, {} as Record<string, ChargeSummary>)
     );
 
-    const totalAmount = latestSummariesByBuilding.reduce((s, item) => s + item.total_amount, 0);
-    const totalPaidCount = latestSummariesByBuilding.reduce((s, item) => s + item.paid_count, 0);
-    const totalCount = latestSummariesByBuilding.reduce((s, item) => s + item.total_count, 0);
+    const totalAmount = latestSummariesByBuilding.reduce((s: number, item: ChargeSummary) => s + item.total_amount, 0);
+    const totalPaidCount = latestSummariesByBuilding.reduce((s: number, item: ChargeSummary) => s + item.paid_count, 0);
+    const totalCount = latestSummariesByBuilding.reduce((s: number, item: ChargeSummary) => s + item.total_count, 0);
 
     return (
         <div>
@@ -193,7 +167,7 @@ export default function ChargesPage() {
                     onChange={e => setFilterBuilding(e.target.value)}
                 >
                     <option value="">Todos los edificios</option>
-                    {buildings.map(b => (
+                    {buildings.map((b: Building) => (
                         <option key={b.id} value={b.id}>{b.name}</option>
                     ))}
                 </select>
@@ -232,7 +206,7 @@ export default function ChargesPage() {
                             </tr>
                         </thead>
                         <tbody>
-                            {filteredSummaries.map((s) => (
+                            {filteredSummaries.map((s: ChargeSummary) => (
                                 <tr key={`${s.building_id}-${s.period}`}>
                                     <td style={{ fontWeight: 500 }}>{s.building_name}</td>
                                     <td>{s.period}</td>
@@ -259,7 +233,7 @@ export default function ChargesPage() {
                                     <td style={{ textAlign: "right" }}>
                                         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", justifyContent: "flex-end" }}>
                                             {/* Check if archived (older than building's latest period) */}
-                                            {(latestSummariesByBuilding.find(ls => ls.building_id === s.building_id)?.period || "") > s.period && (
+                                            {(latestSummariesByBuilding.find((ls: ChargeSummary) => ls.building_id === s.building_id)?.period || "") > s.period && (
                                                 <span className="badge" style={{ background: "var(--color-gray-100)", color: "var(--color-gray-600)", border: "1px solid var(--color-gray-200)", fontSize: "0.6rem", padding: "0.15rem 0.4rem" }}>
                                                     ARCHIVO
                                                 </span>
