@@ -2,6 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { createClient } from "@/lib/supabase/client";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const navItems = [
     {
@@ -40,6 +44,35 @@ const navItems = [
 
 export function Sidebar() {
     const pathname = usePathname();
+    const queryClient = useQueryClient();
+
+    const prefetchData = async () => {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
+        // Prefetch buildings
+        queryClient.prefetchQuery({
+            queryKey: ["buildings"],
+            queryFn: async () => {
+                const res = await fetch(`${API_URL}/api/buildings/`, {
+                    headers: { Authorization: `Bearer ${session.access_token}` },
+                });
+                return res.json();
+            },
+        });
+
+        // Prefetch summaries
+        queryClient.prefetchQuery({
+            queryKey: ["charge-summaries"],
+            queryFn: async () => {
+                const res = await fetch(`${API_URL}/api/charges/summary`, {
+                    headers: { Authorization: `Bearer ${session.access_token}` },
+                });
+                return res.json();
+            },
+        });
+    };
 
     function isActive(href: string) {
         if (href === "/admin") return pathname === "/admin";
@@ -64,6 +97,7 @@ export function Sidebar() {
                                 key={link.href}
                                 href={link.href}
                                 className={`sidebar-link ${isActive(link.href) ? "active" : ""}`}
+                                onMouseEnter={prefetchData}
                             >
                                 <span style={{ fontSize: "1rem" }}>{link.icon}</span>
                                 {link.label}

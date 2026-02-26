@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getExpenses, saveExpenses, copyExpenses, Expense } from "@/lib/expenses-api";
+import { useBuildings, Building } from "@/hooks/api/useBuildings";
+import { useExpenses } from "@/hooks/api/useExpenses";
 
-interface Building { id: string; name: string }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -17,55 +18,29 @@ function getPreviousPeriod(currentPeriod: string) {
 }
 
 export default function ExpensesPage() {
-    const [buildings, setBuildings] = useState<Building[]>([]);
+    const { data: buildings = [] } = useBuildings();
+
     const [buildingId, setBuildingId] = useState("");
     const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
 
+    const { data: initialExpenses = [], isLoading: loading, refetch: refetchExpenses } = useExpenses(buildingId, period);
+
     const [expenses, setExpenses] = useState<Expense[]>([]);
-    const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [copying, setCopying] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
 
+    // Sync initial query data to local state for editing
     useEffect(() => {
-        async function load() {
-            const supabase = createClient();
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
-            const res = await fetch(`${API_URL}/api/buildings/`, {
-                headers: { Authorization: `Bearer ${session.access_token}` },
-            });
-            if (res.ok) setBuildings(await res.json());
-        }
-        load();
-    }, []);
+        setExpenses(initialExpenses);
+    }, [initialExpenses]);
 
-    useEffect(() => {
-        if (buildingId && period) {
-            fetchExpenses();
-        } else {
-            setExpenses([]);
-        }
-    }, [buildingId, period]);
-
-    const fetchExpenses = async () => {
-        setLoading(true);
+    const fetchExpenses = useCallback(async () => {
         setError(null);
         setSuccess(null);
-        try {
-            const supabase = createClient();
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
-
-            const data = await getExpenses(session.access_token, buildingId, period);
-            setExpenses(data || []);
-        } catch (err) {
-            console.error(err);
-            setError("Error al cargar los gastos");
-        } finally {
-            setLoading(false);
-        }
-    };
+        refetchExpenses();
+    }, [refetchExpenses]);
 
     const handleSave = async () => {
         setSaving(true);
@@ -98,7 +73,7 @@ export default function ExpensesPage() {
     };
 
     const handleCopyPrevious = async () => {
-        setLoading(true);
+        setCopying(true); // Use the new copying state
         setError(null);
         try {
             const supabase = createClient();
@@ -124,7 +99,7 @@ export default function ExpensesPage() {
             console.error(err);
             setError("Error al copiar mes anterior");
         } finally {
-            setLoading(false);
+            setCopying(false);
         }
     };
 
