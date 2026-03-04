@@ -30,6 +30,7 @@ const navItems = [
         section: "Comunicación",
         links: [
             { href: "/admin/notifications", label: "Notificaciones", icon: "🔔" },
+            { href: "/admin/polls", label: "Votaciones", icon: "🗳" },
             { href: "/admin/documents", label: "Documentos", icon: "📁" },
         ],
     },

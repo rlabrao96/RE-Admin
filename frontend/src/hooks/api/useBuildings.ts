@@ -6,6 +6,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 export interface Building {
     id: string;
     name: string;
+    address?: string;
+    commune?: string;
+    region?: string;
+    rut_edificio?: string;
+    interest_rate_percent?: number;
+    grace_period_days?: number;
+    late_payment_fine_utm?: number;
+    due_day?: number;
 }
 
 export function useBuildings() {
@@ -22,5 +30,6 @@ export function useBuildings() {
             if (!res.ok) throw new Error("Failed to fetch buildings");
             return res.json();
         },
+        staleTime: 1000 * 60 * 30, // 30 minutes — buildings rarely change
     });
 }

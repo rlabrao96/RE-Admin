@@ -14,7 +14,9 @@ export interface ChargeSummary {
     percent_paid: number;
 }
 
-export function useChargeSummaries() {
+// buildingId is optional. When provided the hook returns only that building's summaries
+// but still uses the shared cache key — one network request serves all callers.
+export function useChargeSummaries(buildingId?: string | null) {
     return useQuery<ChargeSummary[]>({
         queryKey: ["charge-summaries"],
         queryFn: async () => {
@@ -28,5 +30,9 @@ export function useChargeSummaries() {
             if (!res.ok) throw new Error("Failed to fetch charge summaries");
             return res.json();
         },
+        select: buildingId
+            ? (data) => data.filter((s) => s.building_id === buildingId)
+            : undefined,
+        staleTime: 1000 * 60 * 5, // 5 minutes — summaries update after payments
     });
 }

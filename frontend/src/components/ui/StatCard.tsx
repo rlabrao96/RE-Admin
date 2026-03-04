@@ -1,14 +1,17 @@
+import Link from "next/link";
+
 interface StatCardProps {
     label: string;
     value: string;
     trend?: string;
     trendPositive?: boolean;
     icon?: React.ReactNode;
+    href?: string;
 }
 
-export function StatCard({ label, value, trend, trendPositive = true, icon }: StatCardProps) {
-    return (
-        <div className="stat-card">
+export function StatCard({ label, value, trend, trendPositive = true, icon, href }: StatCardProps) {
+    const content = (
+        <>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
                 <span className="stat-label">{label}</span>
                 {icon && (
@@ -29,6 +32,20 @@ export function StatCard({ label, value, trend, trendPositive = true, icon }: St
                     {trendPositive ? "↑" : "↓"} {trend}
                 </span>
             )}
+        </>
+    );
+
+    if (href) {
+        return (
+            <Link href={href} className="stat-card" style={{ display: "flex", textDecoration: "none" }}>
+                {content}
+            </Link>
+        );
+    }
+
+    return (
+        <div className="stat-card">
+            {content}
         </div>
     );
 }

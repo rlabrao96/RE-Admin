@@ -1,140 +1,331 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useState, useMemo } from "react";
+import { useBuildings } from "@/hooks/api/useBuildings";
+import {
+    useBankConfig,
+    useFintocMovements,
+    useSyncMovements,
+    useIgnoreMovement,
+    useUnmatchMovement,
+    useAccountBalance,
+    type FintocMovement,
+} from "@/hooks/api/useFintoc";
+import AccountSetup from "./AccountSetup";
+import ConciliationMode from "./ConciliationMode";
 
-interface Payment {
-    id: string;
-    amount_clp: number;
-    payment_method: string;
-    status: string;
-    reconciliation_status: string;
-    paid_at: string;
-    charges?: { concept: string; period: string; units?: { number: string } };
-    residents?: { profiles?: { full_name: string } };
+const STATUS_LABELS: Record<string, { label: string; badge: string }> = {
+    unmatched: { label: "Sin conciliar", badge: "badge-warning" },
+    auto_matched: { label: "Auto", badge: "badge-success" },
+    manual_matched: { label: "Manual", badge: "badge-primary" },
+    ignored: { label: "Ignorado", badge: "badge-ghost" },
+};
+
+function formatCLP(n: number) {
+    return "$" + n.toLocaleString("es-CL");
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-function formatCLP(n: number) { return `$${n.toLocaleString("es-CL")}`; }
+function formatMonthLabel(ym: string) {
+    const [year, month] = ym.split("-");
+    const date = new Date(Number(year), Number(month) - 1, 1);
+    return date.toLocaleString("es-CL", { month: "long", year: "numeric" });
+}
 
 export default function ReconciliationPage() {
-    const [payments, setPayments] = useState<Payment[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [reconciling, setReconciling] = useState<string | null>(null);
+    const { data: buildings = [] } = useBuildings();
+    const [selectedBuilding, setSelectedBuilding] = useState<string | null>(null);
+    const [statusFilter, setStatusFilter] = useState<string>("");
+    const [monthFilter, setMonthFilter] = useState<string>("");
+    const [showSetup, setShowSetup] = useState(false);
+    const [isConciliationMode, setIsConciliationMode] = useState(false);
 
-    const fetchPending = useCallback(async () => {
-        setLoading(true);
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        const res = await fetch(`${API_URL}/api/payments/pending-reconciliation`, {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (res.ok) setPayments(await res.json());
-        setLoading(false);
-    }, []);
+    const buildingId = selectedBuilding || (buildings.length > 0 ? buildings[0].id : null);
 
-    useEffect(() => { fetchPending(); }, [fetchPending]);
+    const { data: bankConfig, isLoading: configLoading } = useBankConfig(buildingId);
+    const { data: movements = [], isLoading: movementsLoading } = useFintocMovements(
+        buildingId,
+        statusFilter || undefined,
+        monthFilter || undefined,
+    );
+    const syncMutation = useSyncMovements(buildingId);
+    const ignoreMutation = useIgnoreMovement(buildingId);
+    const unmatchMutation = useUnmatchMovement(buildingId);
 
-    async function handleReconcile(paymentId: string, externalRef: string) {
-        setReconciling(paymentId);
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        await fetch(`${API_URL}/api/payments/reconcile`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-            body: JSON.stringify({ payment_id: paymentId, external_ref: externalRef || null }),
-        });
-        setReconciling(null);
-        fetchPending();
-    }
+    const isLinked = !!bankConfig?.fintoc_link_token;
+    const { data: balance } = useAccountBalance(buildingId, isLinked);
+
+    // Derive available months from all movements (unfiltered — use a separate query key without month)
+    const { data: allMovements = [] } = useFintocMovements(buildingId, undefined, undefined);
+    const availableMonths = useMemo(() => {
+        const months = new Set<string>();
+        for (const m of allMovements) {
+            months.add(m.post_date.slice(0, 7)); // "YYYY-MM"
+        }
+        return Array.from(months).sort().reverse();
+    }, [allMovements]);
+
+    // Stats
+    const stats = useMemo(() => {
+        const total = movements.length;
+        const unmatched = movements.filter(m => m.reconciliation_status === "unmatched").length;
+        const matched = movements.filter(m => m.reconciliation_status === "auto_matched" || m.reconciliation_status === "manual_matched").length;
+        const totalInflow = movements.filter(m => m.type === "inflow").reduce((s, m) => s + m.amount, 0);
+        const totalOutflow = movements.filter(m => m.type === "outflow").reduce((s, m) => s + m.amount, 0);
+        return { total, unmatched, matched, totalInflow, totalOutflow };
+    }, [movements]);
 
     return (
         <div>
-            <div className="page-header">
+            <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div>
-                    <h1 className="page-title">Conciliación de Pagos</h1>
-                    <p className="page-subtitle">
-                        {payments.length} pago{payments.length !== 1 ? "s" : ""} pendiente{payments.length !== 1 ? "s" : ""} de confirmar
-                    </p>
+                    <h1 className="page-title">Conciliación Bancaria</h1>
+                    <p className="page-subtitle">Detecta y vincula movimientos bancarios con cobros y gastos del edificio.</p>
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                    <select
+                        className="form-input"
+                        style={{ width: "auto", minWidth: "200px" }}
+                        value={buildingId || ""}
+                        onChange={e => setSelectedBuilding(e.target.value)}
+                    >
+                        {buildings.map(b => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                    </select>
+                    <button className="btn btn-secondary" onClick={() => setShowSetup(!showSetup)}>
+                        {showSetup ? "Cerrar Config" : "Config"}
+                    </button>
                 </div>
             </div>
 
-            {loading ? (
-                <p style={{ color: "var(--color-gray-500)" }}>Cargando...</p>
-            ) : payments.length === 0 ? (
-                <div className="card" style={{ textAlign: "center", padding: "3rem" }}>
-                    <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>✅</div>
-                    <h2 style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Todo conciliado</h2>
-                    <p style={{ color: "var(--color-gray-500)" }}>No hay pagos pendientes de verificar.</p>
+            {/* Account Setup (collapsible) */}
+            {showSetup && buildingId && (
+                <div style={{ marginBottom: "1rem" }}>
+                    <AccountSetup
+                        buildingId={buildingId}
+                        existing={bankConfig}
+                    />
                 </div>
-            ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                    {payments.map((payment) => (
-                        <ReconcileRow
-                            key={payment.id}
-                            payment={payment}
-                            onReconcile={handleReconcile}
-                            reconciling={reconciling === payment.id}
-                        />
-                    ))}
+            )}
+
+            {/* Not linked banner */}
+            {!configLoading && !isLinked && !showSetup && (
+                <div className="card" style={{ padding: "2rem", textAlign: "center" }}>
+                    <p style={{ fontSize: "1.125rem", fontWeight: 600, marginBottom: "0.5rem" }}>
+                        Cuenta bancaria no conectada
+                    </p>
+                    <p style={{ color: "var(--color-gray-500)", marginBottom: "1rem" }}>
+                        Configura las credenciales de Fintoc para comenzar a detectar movimientos automáticamente.
+                    </p>
+                    <button className="btn btn-primary" onClick={() => setShowSetup(true)}>
+                        Configurar Cuenta
+                    </button>
                 </div>
+            )}
+
+            {/* Stats + Sync bar */}
+            {isLinked && (
+                <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "0.75rem", marginBottom: "1rem" }}>
+                        {/* Account balance — live from Fintoc */}
+                        <div className="card" style={{ padding: "1rem", textAlign: "center", gridColumn: "span 1", borderLeft: "3px solid var(--color-primary)" }}>
+                            <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--color-primary)" }}>
+                                {balance ? formatCLP(balance.available ?? balance.current ?? 0) : "—"}
+                            </div>
+                            <div style={{ fontSize: "0.75rem", color: "var(--color-gray-500)" }}>Saldo Disponible</div>
+                            {balance?.refreshed_at && (
+                                <div style={{ fontSize: "0.65rem", color: "var(--color-gray-400)", marginTop: "0.25rem" }}>
+                                    {new Date(balance.refreshed_at).toLocaleString("es-CL", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                </div>
+                            )}
+                        </div>
+                        <div className="card" style={{ padding: "1rem", textAlign: "center" }}>
+                            <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>{stats.total}</div>
+                            <div style={{ fontSize: "0.75rem", color: "var(--color-gray-500)" }}>Movimientos</div>
+                        </div>
+                        <div className="card" style={{ padding: "1rem", textAlign: "center" }}>
+                            <div style={{ fontSize: "1.5rem", fontWeight: 700, color: "var(--color-warning)" }}>{stats.unmatched}</div>
+                            <div style={{ fontSize: "0.75rem", color: "var(--color-gray-500)" }}>Sin conciliar</div>
+                        </div>
+                        <div className="card" style={{ padding: "1rem", textAlign: "center" }}>
+                            <div style={{ fontSize: "1.5rem", fontWeight: 700, color: "var(--color-success)" }}>{stats.matched}</div>
+                            <div style={{ fontSize: "0.75rem", color: "var(--color-gray-500)" }}>Conciliados</div>
+                        </div>
+                        <div className="card" style={{ padding: "1rem", textAlign: "center" }}>
+                            <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--color-success)" }}>{formatCLP(stats.totalInflow)}</div>
+                            <div style={{ fontSize: "0.75rem", color: "var(--color-gray-500)" }}>Total Ingresos</div>
+                        </div>
+                        <div className="card" style={{ padding: "1rem", textAlign: "center" }}>
+                            <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--color-error)" }}>{formatCLP(stats.totalOutflow)}</div>
+                            <div style={{ fontSize: "0.75rem", color: "var(--color-gray-500)" }}>Total Egresos</div>
+                        </div>
+                    </div>
+
+                    {/* Toolbar */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+                        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                            {/* Month filter */}
+                            <select
+                                className="form-input"
+                                style={{ width: "auto" }}
+                                value={monthFilter}
+                                onChange={e => setMonthFilter(e.target.value)}
+                            >
+                                <option value="">Todos los meses</option>
+                                {availableMonths.map(m => (
+                                    <option key={m} value={m}>{formatMonthLabel(m)}</option>
+                                ))}
+                            </select>
+
+                            {/* Status filter (hidden in conciliation mode) */}
+                            {!isConciliationMode && (
+                                <select className="form-input" style={{ width: "auto" }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                                    <option value="">Todos</option>
+                                    <option value="unmatched">Sin conciliar</option>
+                                    <option value="auto_matched">Auto-conciliados</option>
+                                    <option value="manual_matched">Manual</option>
+                                    <option value="ignored">Ignorados</option>
+                                </select>
+                            )}
+
+                            {bankConfig?.last_sync_at && (
+                                <span style={{ fontSize: "0.75rem", color: "var(--color-gray-400)" }}>
+                                    Última sync: {new Date(bankConfig.last_sync_at).toLocaleString("es-CL")}
+                                </span>
+                            )}
+                        </div>
+
+                        <div style={{ display: "flex", gap: "0.5rem" }}>
+                            <button
+                                className={`btn ${isConciliationMode ? "btn-primary" : "btn-secondary"}`}
+                                onClick={() => {
+                                    setIsConciliationMode(!isConciliationMode);
+                                    setStatusFilter(""); // reset status filter when toggling
+                                }}
+                            >
+                                {isConciliationMode ? "Vista Normal" : "Modo Conciliación"}
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => syncMutation.mutate()}
+                                disabled={syncMutation.isPending}
+                            >
+                                {syncMutation.isPending ? "Sincronizando..." : "Sincronizar"}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Sync result message */}
+                    {syncMutation.isSuccess && (
+                        <div style={{ padding: "0.75rem 1rem", background: "#ecfdf5", borderRadius: "var(--radius-md)", marginBottom: "0.75rem", fontSize: "0.875rem", color: "var(--color-success)" }}>
+                            {syncMutation.data.message}
+                        </div>
+                    )}
+
+                    {/* Conciliation Mode / Normal Table */}
+                    {isConciliationMode ? (
+                        buildingId && (
+                            <ConciliationMode
+                                buildingId={buildingId}
+                                movements={movements.filter(m => m.reconciliation_status === "unmatched")}
+                                isLoading={movementsLoading}
+                            />
+                        )
+                    ) : (
+                        movementsLoading ? (
+                            <p style={{ color: "var(--color-gray-500)" }}>Cargando movimientos...</p>
+                        ) : movements.length === 0 ? (
+                            <div className="card" style={{ padding: "2rem", textAlign: "center" }}>
+                                <p style={{ color: "var(--color-gray-500)" }}>
+                                    {statusFilter || monthFilter ? "No hay movimientos con este filtro." : "No hay movimientos. Presiona Sincronizar para importar desde Fintoc."}
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Tipo</th>
+                                            <th>Monto</th>
+                                            <th>Descripción</th>
+                                            <th>Contraparte</th>
+                                            <th>Estado</th>
+                                            <th style={{ textAlign: "right" }}>Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {movements.map((m) => (
+                                            <MovementRow
+                                                key={m.id}
+                                                movement={m}
+                                                onIgnore={() => ignoreMutation.mutate(m.id)}
+                                                onUnmatch={() => unmatchMutation.mutate(m.id)}
+                                            />
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )
+                    )}
+                </>
             )}
         </div>
     );
 }
 
-function ReconcileRow({ payment, onReconcile, reconciling }: {
-    payment: Payment;
-    onReconcile: (id: string, ref: string) => void;
-    reconciling: boolean;
+// ── Movement Row ─────────────────────────────────────────────────────────────
+
+function MovementRow({
+    movement: m,
+    onIgnore,
+    onUnmatch,
+}: {
+    movement: FintocMovement;
+    onIgnore: () => void;
+    onUnmatch: () => void;
 }) {
-    const [externalRef, setExternalRef] = useState("");
-    const [expanded, setExpanded] = useState(false);
+    const statusInfo = STATUS_LABELS[m.reconciliation_status] || { label: m.reconciliation_status, badge: "" };
+    const isMatched = m.reconciliation_status === "auto_matched" || m.reconciliation_status === "manual_matched";
 
     return (
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-            <div
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem", cursor: "pointer" }}
-                onClick={() => setExpanded(!expanded)}
-            >
-                <div>
-                    <div style={{ fontWeight: 600 }}>
-                        {payment.charges?.concept ?? "Pago"} — {payment.charges?.units?.number ?? ""}
-                    </div>
-                    <div style={{ fontSize: "0.875rem", color: "var(--color-gray-500)", marginTop: "0.25rem" }}>
-                        {payment.residents?.profiles?.full_name ?? "Residente"} · {payment.payment_method} · {new Date(payment.paid_at).toLocaleDateString("es-CL")}
-                    </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-                    <span style={{ fontWeight: 700, fontSize: "1.125rem" }}>{formatCLP(payment.amount_clp)}</span>
-                    <span style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "0.2s" }}>▼</span>
-                </div>
-            </div>
-
-            {expanded && (
-                <div style={{ borderTop: "1px solid var(--color-gray-100)", padding: "1rem 1.25rem", background: "var(--color-gray-50)" }}>
-                    <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-end" }}>
-                        <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-                            <label className="form-label">Referencia externa (opcional)</label>
-                            <input
-                                className="form-input"
-                                value={externalRef}
-                                onChange={e => setExternalRef(e.target.value)}
-                                placeholder="Nº transferencia o comprobante Transbank"
-                            />
-                        </div>
-                        <button
-                            className="btn btn-primary"
-                            disabled={reconciling}
-                            onClick={() => onReconcile(payment.id, externalRef)}
-                        >
-                            {reconciling ? "Confirmando..." : "✅ Confirmar"}
-                        </button>
-                    </div>
-                </div>
-            )}
-        </div>
+        <tr>
+            <td style={{ whiteSpace: "nowrap" }}>{m.post_date}</td>
+            <td>
+                <span className={`badge ${m.type === "inflow" ? "badge-success" : "badge-error"}`}>
+                    {m.type === "inflow" ? "Ingreso" : "Egreso"}
+                </span>
+            </td>
+            <td style={{ fontWeight: 600, color: m.type === "inflow" ? "var(--color-success)" : "var(--color-error)" }}>
+                {m.type === "inflow" ? "+" : "-"}{"$" + m.amount.toLocaleString("es-CL")}
+            </td>
+            <td style={{ maxWidth: "250px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {m.description || "—"}
+            </td>
+            <td>
+                <div style={{ fontSize: "0.8125rem" }}>{m.holder_name || "—"}</div>
+                {m.holder_id && <div style={{ fontSize: "0.75rem", color: "var(--color-gray-400)" }}>{m.holder_id}</div>}
+            </td>
+            <td>
+                <span className={`badge ${statusInfo.badge}`}>{statusInfo.label}</span>
+            </td>
+            <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                {m.reconciliation_status === "unmatched" && (
+                    <button className="btn btn-ghost" style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }} onClick={onIgnore}>
+                        Ignorar
+                    </button>
+                )}
+                {isMatched && (
+                    <button className="btn btn-ghost" style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }} onClick={onUnmatch}>
+                        Deshacer
+                    </button>
+                )}
+                {m.reconciliation_status === "ignored" && (
+                    <button className="btn btn-ghost" style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }} onClick={onUnmatch}>
+                        Restaurar
+                    </button>
+                )}
+            </td>
+        </tr>
     );
 }

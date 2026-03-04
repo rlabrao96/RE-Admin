@@ -18,7 +18,7 @@ class PaymentResponse(BaseModel):
 
 
 class ManualPaymentCreate(BaseModel):
-    charge_id: UUID
+    charge_ids: list[UUID]
     amount_clp: int
     payment_method: str = "transferencia"
     notes: Optional[str] = None

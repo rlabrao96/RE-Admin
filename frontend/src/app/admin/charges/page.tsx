@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import { useBuildings } from "@/hooks/api/useBuildings";
 import { useChargeSummaries } from "@/hooks/api/useChargeSummaries";
@@ -33,6 +34,7 @@ function formatCLP(amount: number) {
 }
 
 export default function ChargesPage() {
+    const queryClient = useQueryClient();
     const { data: buildings = [], isLoading: buildingsLoading } = useBuildings();
     const { data: summaries = [], isLoading: summariesLoading, refetch: fetchSummaries } = useChargeSummaries();
 
@@ -40,6 +42,53 @@ export default function ChargesPage() {
     const [filterPeriod, setFilterPeriod] = useState("");
 
     const loading = buildingsLoading || summariesLoading;
+
+    // Prefetch each building's latest period charges so detail page opens instantly
+    useEffect(() => {
+        if (summaries.length === 0) return;
+
+        const latestByBuilding: Record<string, string> = {};
+        summaries.forEach((s: ChargeSummary) => {
+            if (!latestByBuilding[s.building_id] || s.period > latestByBuilding[s.building_id]) {
+                latestByBuilding[s.building_id] = s.period;
+            }
+        });
+
+        async function prefetchAll() {
+            const supabase = createClient();
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) return;
+
+            Object.entries(latestByBuilding).forEach(([buildingId, period]) => {
+                queryClient.prefetchQuery({
+                    queryKey: ["charges", buildingId, period],
+                    queryFn: async () => {
+                        const [resCurr, resPast] = await Promise.all([
+                            fetch(`${API_URL}/api/charges/?building_id=${buildingId}&period=${period}`, {
+                                headers: { Authorization: `Bearer ${session.access_token}` },
+                            }),
+                            fetch(`${API_URL}/api/charges/?building_id=${buildingId}`, {
+                                headers: { Authorization: `Bearer ${session.access_token}` },
+                            }),
+                        ]);
+                        if (!resCurr.ok || !resPast.ok) return [];
+                        const [dataCurr, dataPast] = await Promise.all([resCurr.json(), resPast.json()]);
+                        const isPendingForPeriod = (c: any, p: string) => {
+                            if (c.period >= p) return false;
+                            if (c.status === "pending") return true;
+                            if (c.status === "paid" && c.paid_at) return c.paid_at.substring(0, 7) >= p;
+                            return false;
+                        };
+                        const existingIds = new Set(dataCurr.map((c: any) => c.id));
+                        return [...dataCurr, ...dataPast.filter((c: any) => !existingIds.has(c.id) && isPendingForPeriod(c, period))];
+                    },
+                    staleTime: 1000 * 60 * 3,
+                });
+            });
+        }
+
+        prefetchAll();
+    }, [summaries, queryClient]);
     const [modifyModal, setModifyModal] = useState<ModifyModal | null>(null);
     const [modifyLoading, setModifyLoading] = useState(false);
     const [modifyForm, setModifyForm] = useState({

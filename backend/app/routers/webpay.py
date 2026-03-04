@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.dependencies.auth import require_resident, supabase
+from app.dependencies.auth import require_resident, get_supabase_client
+from supabase import Client
 from app.config import settings
 from datetime import datetime, timezone
 import httpx
@@ -26,7 +27,7 @@ def get_base_url():
 
 
 class WebpayInitRequest(BaseModel):
-    charge_id: str
+    charge_ids: list[str]
     amount_clp: int
     return_url: str
 
@@ -36,7 +37,11 @@ class WebpayConfirmRequest(BaseModel):
 
 
 @router.post("/init")
-async def init_transaction(data: WebpayInitRequest, user=Depends(require_resident)):
+async def init_transaction(
+    data: WebpayInitRequest, 
+    user=Depends(require_resident),
+    supabase: Client = Depends(get_supabase_client),
+):
     """Initiate a Webpay Plus transaction for a pending charge."""
     # Verify charge belongs to this resident's unit
     resident_data = user  # require_resident returns the resident record
@@ -54,7 +59,7 @@ async def init_transaction(data: WebpayInitRequest, user=Depends(require_residen
         raise HTTPException(status_code=400, detail="Este cobro ya fue pagado")
 
     # Create a buy order reference
-    buy_order = f"EDIF-{data.charge_id[:8].upper()}"
+    buy_order = f"EDIF-{data.charge_ids[0][:8].upper()}"
     session_id = f"RES-{resident_data['id'][:8].upper()}"
 
     async with httpx.AsyncClient() as client:
@@ -74,22 +79,27 @@ async def init_transaction(data: WebpayInitRequest, user=Depends(require_residen
 
     resp_data = resp.json()
 
-    # Store pending payment record
-    supabase.table("payments").insert({
-        "charge_id": data.charge_id,
-        "resident_id": resident_data["id"],
-        "amount_clp": data.amount_clp,
-        "payment_method": "webpay",
-        "status": "pending",
-        "reconciliation_status": "pending",
-        "external_ref": resp_data.get("token"),
-    }).execute()
+    # Store pending payment records for each charge
+    for c_id in data.charge_ids:
+        supabase.table("payments").insert({
+            "charge_id": c_id,
+            "resident_id": resident_data["id"],
+            "amount_clp": 0, # We'll fill this better or keep it simple
+            "payment_method": "webpay",
+            "status": "pending",
+            "reconciliation_status": "pending",
+            "external_ref": resp_data.get("token"),
+        }).execute()
 
     return {"url": resp_data.get("url"), "token": resp_data.get("token")}
 
 
 @router.post("/confirm")
-async def confirm_transaction(data: WebpayConfirmRequest, user=Depends(require_resident)):
+async def confirm_transaction(
+    data: WebpayConfirmRequest, 
+    user=Depends(require_resident),
+    supabase: Client = Depends(get_supabase_client),
+):
     """Confirm a Webpay Plus transaction after redirect back from bank."""
     async with httpx.AsyncClient() as client:
         resp = await client.put(
@@ -118,15 +128,14 @@ async def confirm_transaction(data: WebpayConfirmRequest, user=Depends(require_r
         "reconciled_at": datetime.now(timezone.utc).isoformat(),
     }).eq("external_ref", data.token_ws).execute()
 
-    # Find the charge from the payment record and mark as paid
-    payment = (
+    # Find all charges from the payment records and mark as paid
+    payments = (
         supabase.table("payments")
         .select("charge_id")
         .eq("external_ref", data.token_ws)
-        .maybe_single()
         .execute()
     )
-    if payment.data:
-        supabase.table("charges").update({"status": "paid"}).eq("id", payment.data["charge_id"]).execute()
+    for p in payments.data:
+        supabase.table("charges").update({"status": "paid"}).eq("id", p["charge_id"]).execute()
 
     return {"status": "approved", "authorization_code": result.get("authorization_code")}

@@ -143,6 +143,14 @@ body {
   flex-direction: column;
   gap: 0.5rem;
   box-shadow: var(--shadow-sm);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  text-decoration: none;
+}
+
+.stat-card:hover {
+  transform: scale(1.02);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
 }
 
 .stat-label {

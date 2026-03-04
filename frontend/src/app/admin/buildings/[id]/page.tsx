@@ -1,22 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
-
-interface Unit {
-    id: string;
-    number: string;
-    type: string;
-    surface_m2?: number;
-    alicuota: number;
-    residents?: Array<{ id: string; is_owner: boolean; profiles?: { full_name: string; email?: string } }>;
-}
-
-interface FloorGroup {
-    floor: { id: string; number: number };
-    units: Unit[];
-}
+import { useBuilding } from "@/hooks/api/useBuilding";
+import { useUnits, type Unit } from "@/hooks/api/useUnits";
+import { useDocuments } from "@/hooks/api/useDocuments";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -30,14 +20,17 @@ const UNIT_TYPE_LABELS: Record<string, string> = {
 
 export default function BuildingDetailPage() {
     const { id } = useParams<{ id: string }>();
-    const [building, setBuilding] = useState<{ id?: string, name: string; address: string; commune: string; region?: string; rut_edificio: string; interest_rate_percent?: number; grace_period_days?: number; late_payment_fine_utm?: number } | null>(null);
-    const [floors, setFloors] = useState<FloorGroup[]>([]);
+    const queryClient = useQueryClient();
+
+    // Data from React Query cache — shared with other pages, no redundant fetches
+    const { data: building, isLoading: buildingLoading } = useBuilding(id);
+    const { data: floors = [], isLoading: floorsLoading } = useUnits(id);
+    const loading = buildingLoading || floorsLoading;
 
     // Penalty config state
     const [showPenaltySettings, setShowPenaltySettings] = useState(false);
     const [penaltyData, setPenaltyData] = useState({ interest_rate_percent: 0.0, grace_period_days: 10, late_payment_fine_utm: 1.0 });
     const [savingPenalty, setSavingPenalty] = useState(false);
-    const [loading, setLoading] = useState(true);
     const [openFloors, setOpenFloors] = useState<Set<string>>(new Set());
     const [showAddUnit, setShowAddUnit] = useState<string | null>(null); // floor_id
     const [newUnit, setNewUnit] = useState({ number: "", type: "departamento", surface_m2: "", alicuota: "" });
@@ -49,40 +42,133 @@ export default function BuildingDetailPage() {
     });
     const [savingResidents, setSavingResidents] = useState(false);
 
-    const getToken = useCallback(async () => {
+    // Document state
+    const [showDocuments, setShowDocuments] = useState(false);
+    const {
+        data: documents = [],
+        isLoading: loadingDocs,
+        refetch: refetchDocuments
+    } = useDocuments(id);
+    const [uploadingDoc, setUploadingDoc] = useState(false);
+    const [newDocName, setNewDocName] = useState("");
+    const [newDocFile, setNewDocFile] = useState<File | null>(null);
+    const [newDocVisible, setNewDocVisible] = useState(true);
+
+    // One-time initialization: open all floors when units first load
+    const openFloorsInitialized = useRef(false);
+    useEffect(() => {
+        if (floors.length > 0 && !openFloorsInitialized.current) {
+            setOpenFloors(new Set(floors.map(g => g.floor.id)));
+            openFloorsInitialized.current = true;
+        }
+    }, [floors]);
+
+    // One-time initialization: populate penalty form from building data
+    const penaltyInitialized = useRef(false);
+    useEffect(() => {
+        if (building && !penaltyInitialized.current) {
+            setPenaltyData({
+                interest_rate_percent: building.interest_rate_percent || 0.0,
+                grace_period_days: building.grace_period_days || 10,
+                late_payment_fine_utm: building.late_payment_fine_utm || 1.0,
+            });
+            penaltyInitialized.current = true;
+        }
+    }, [building]);
+
+    // Handlers
+
+    async function handleUploadDocument() {
+        if (!newDocFile || !newDocName) return;
+        setUploadingDoc(true);
+        try {
+            const supabase = createClient();
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) return;
+
+            const formData = new FormData();
+            formData.append("building_id", id as string);
+            formData.append("name", newDocName);
+            formData.append("is_visible", newDocVisible.toString());
+            formData.append("file", newDocFile);
+
+            const res = await fetch(`${API_URL}/api/documents/upload`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${session.access_token}` },
+                body: formData
+            });
+
+            if (res.ok) {
+                setNewDocName("");
+                setNewDocFile(null);
+                refetchDocuments();
+            }
+        } finally {
+            setUploadingDoc(false);
+        }
+    }
+
+    async function toggleDocVisibility(docId: string, current: boolean) {
         const supabase = createClient();
         const { data: { session } } = await supabase.auth.getSession();
-        return session?.access_token;
-    }, []);
+        if (!session) return;
+        await fetch(`${API_URL}/api/documents/${docId}/visibility`, {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({ is_visible: !current })
+        });
+        refetchDocuments();
+    }
 
-    const fetchData = useCallback(async () => {
-        const token = await getToken();
-        if (!token) return;
-        const headers = { Authorization: `Bearer ${token}` };
+    async function handleDeleteDoc(docId: string) {
+        if (!confirm("¿Seguro que deseas eliminar este documento?")) return;
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        await fetch(`${API_URL}/api/documents/${docId}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${session.access_token}` }
+        });
+        refetchDocuments();
+    }
 
-        const [buildingRes, unitsRes] = await Promise.all([
-            fetch(`${API_URL}/api/buildings/${id}`, { headers }),
-            fetch(`${API_URL}/api/buildings/${id}/units`, { headers }),
-        ]);
-        if (buildingRes.ok) {
-            const bData = await buildingRes.json();
-            setBuilding(bData);
-            setPenaltyData({
-                interest_rate_percent: bData.interest_rate_percent || 0.0,
-                grace_period_days: bData.grace_period_days || 10,
-                late_payment_fine_utm: bData.late_payment_fine_utm || 1.0
+    async function handleViewDoc(docId: string) {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        try {
+            const res = await fetch(`${API_URL}/api/documents/${docId}/url`, {
+                headers: { Authorization: `Bearer ${session.access_token}` }
             });
-        }
-        if (unitsRes.ok) {
-            const data: FloorGroup[] = await unitsRes.json();
-            setFloors(data);
-            // Open all floors by default
-            setOpenFloors(new Set(data.map((g) => g.floor.id)));
-        }
-        setLoading(false);
-    }, [id, getToken]);
+            if (res.ok) {
+                const { url, content_type, file_path } = await res.json();
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+                // If PDF, force it as a Blob to ensure browser opens it correctly
+                const isPdf = content_type === 'application/pdf' || (file_path && file_path.toLowerCase().endsWith('.pdf'));
+
+                if (isPdf) {
+                    const fileRes = await fetch(url);
+                    const blob = await fileRes.blob();
+                    const pdfBlob = new Blob([blob], { type: 'application/pdf' });
+                    const blobUrl = URL.createObjectURL(pdfBlob);
+                    window.open(blobUrl, "_blank");
+                } else {
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = '';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+            }
+        } catch (err) {
+            console.error("Error fetching doc URL:", err);
+        }
+    }
+
 
     function toggleFloor(floorId: string) {
         setOpenFloors((prev) => {
@@ -94,11 +180,12 @@ export default function BuildingDetailPage() {
     }
 
     async function handleAddUnit(floorId: string) {
-        const token = await getToken();
-        if (!token) return;
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
         await fetch(`${API_URL}/api/floors/${floorId}/units`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
             body: JSON.stringify({
                 number: newUnit.number,
                 type: newUnit.type,
@@ -108,7 +195,7 @@ export default function BuildingDetailPage() {
         });
         setShowAddUnit(null);
         setNewUnit({ number: "", type: "departamento", surface_m2: "", alicuota: "" });
-        fetchData();
+        queryClient.invalidateQueries({ queryKey: ["units", id] });
     }
 
     function openEditResidents(unit: Unit) {
@@ -135,8 +222,9 @@ export default function BuildingDetailPage() {
     async function handleSaveResidents(unitId: string) {
         setSavingResidents(true);
         try {
-            const token = await getToken();
-            if (!token) return;
+            const supabase = createClient();
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) return;
 
             const payload = {
                 owner: editResidentData.owner.email ? editResidentData.owner : null,
@@ -145,11 +233,11 @@ export default function BuildingDetailPage() {
 
             await fetch(`${API_URL}/api/units/${unitId}/residents`, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
                 body: JSON.stringify(payload),
             });
             setShowEditResidents(null);
-            fetchData();
+            queryClient.invalidateQueries({ queryKey: ["units", id] });
         } finally {
             setSavingResidents(false);
         }
@@ -158,8 +246,9 @@ export default function BuildingDetailPage() {
     async function handleSavePenaltySettings() {
         setSavingPenalty(true);
         try {
-            const token = await getToken();
-            if (!token || !building) return;
+            const supabase = createClient();
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session || !building) return;
 
             const payload = {
                 name: building.name,
@@ -172,16 +261,16 @@ export default function BuildingDetailPage() {
                 late_payment_fine_utm: parseFloat(penaltyData.late_payment_fine_utm.toString()) || 1.0,
             };
 
-            console.log("SENDING PAYLOAD:", payload);
-
             const res = await fetch(`${API_URL}/api/buildings/${id}`, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
                 body: JSON.stringify(payload),
             });
             if (res.ok) {
                 const updated = await res.json();
-                setBuilding(updated);
+                // Update cache directly — no refetch needed
+                queryClient.setQueryData(["building", id], updated);
+                queryClient.invalidateQueries({ queryKey: ["buildings"] });
                 setShowPenaltySettings(false);
             } else {
                 const errText = await res.text();
@@ -210,11 +299,18 @@ export default function BuildingDetailPage() {
                         </p>
                     )}
                 </div>
-                {building && (
-                    <button className="btn btn-secondary" onClick={() => setShowPenaltySettings(true)}>
-                        ⚙️ Configuración Penalizaciones
-                    </button>
-                )}
+                <div style={{ display: "flex", gap: "0.75rem" }}>
+                    {building && (
+                        <button className="btn btn-secondary" onClick={() => setShowDocuments(true)}>
+                            📄 Documentos
+                        </button>
+                    )}
+                    {building && (
+                        <button className="btn btn-secondary" onClick={() => setShowPenaltySettings(true)}>
+                            ⚙️ Configuración Penalizaciones
+                        </button>
+                    )}
+                </div>
             </div>
 
             {loading ? (
@@ -547,6 +643,102 @@ export default function BuildingDetailPage() {
                     </div>
                 </div>
             )}
-        </div>
+
+            {/* Documents Modal */}
+            {showDocuments && (
+                <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+                    <div className="card" style={{ width: "90%", maxWidth: "700px", padding: "1.5rem", boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)", maxHeight: "90vh", overflowY: "auto" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+                            <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>Repositorio de Documentos</h2>
+                            <button className="btn btn-ghost" onClick={() => setShowDocuments(false)}>Cerrar</button>
+                        </div>
+
+                        {/* Upload section */}
+                        <div style={{ background: "var(--color-gray-50)", padding: "1rem", borderRadius: "var(--radius-md)", marginBottom: "1.5rem" }}>
+                            <h3 style={{ fontSize: "0.875rem", fontWeight: 600, marginBottom: "0.75rem" }}>Subir Documento</h3>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: "0.75rem", alignItems: "flex-end" }}>
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                    <label className="form-label">Nombre</label>
+                                    <input className="form-input" value={newDocName} onChange={e => setNewDocName(e.target.value)} placeholder="Ej: Reglamento Copropiedad" />
+                                </div>
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                    <label className="form-label">Archivo</label>
+                                    <input type="file" className="form-input" onChange={e => setNewDocFile(e.target.files?.[0] || null)} />
+                                </div>
+                                <button className="btn btn-primary" onClick={handleUploadDocument} disabled={uploadingDoc || !newDocFile || !newDocName}>
+                                    {uploadingDoc ? "..." : "Subir"}
+                                </button>
+                            </div>
+                            <div style={{ marginTop: "0.5rem" }}>
+                                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8125rem", cursor: "pointer" }}>
+                                    <input type="checkbox" checked={newDocVisible} onChange={e => setNewDocVisible(e.target.checked)} />
+                                    Visible para residentes inmediatamente
+                                </label>
+                            </div>
+                        </div>
+
+                        {/* List section */}
+                        {loadingDocs ? (
+                            <p style={{ textAlign: "center", color: "var(--color-gray-500)" }}>Cargando documentos...</p>
+                        ) : documents.length === 0 ? (
+                            <p style={{ textAlign: "center", color: "var(--color-gray-500)", padding: "2rem" }}>No hay documentos en este edificio.</p>
+                        ) : (
+                            <table style={{ fontSize: "0.875rem" }}>
+                                <thead>
+                                    <tr>
+                                        <th>Nombre</th>
+                                        <th>Visibilidad</th>
+                                        <th>Fecha</th>
+                                        <th style={{ textAlign: "right" }}>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {documents.map(doc => (
+                                        <tr key={doc.id}>
+                                            <td>
+                                                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                                    <div style={{ fontWeight: 600 }}>{doc.name}</div>
+                                                    {!doc.building_id && <span className="badge badge-primary" style={{ fontSize: "0.65rem" }}>Global</span>}
+                                                </div>
+                                                <div style={{ fontSize: "0.75rem", color: "var(--color-gray-400)" }}>
+                                                    {(doc.size / 1024 / 1024).toFixed(2)} MB
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                                    <label className="switch">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={doc.is_visible}
+                                                            onChange={() => toggleDocVisibility(doc.id, doc.is_visible)}
+                                                        />
+                                                        <span className="slider"></span>
+                                                    </label>
+                                                    <span style={{
+                                                        fontSize: "0.75rem",
+                                                        color: doc.is_visible ? "var(--color-success)" : "var(--color-gray-500)",
+                                                        fontWeight: 600
+                                                    }}>
+                                                        {doc.is_visible ? "Visible" : "Oculto"}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td>{new Date(doc.uploaded_at || doc.created_at).toLocaleDateString("es-CL")}</td>
+                                            <td style={{ textAlign: "right" }}>
+                                                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                                                    <button className="btn btn-ghost" style={{ padding: "0.25rem 0.5rem" }} onClick={() => handleViewDoc(doc.id)}>📥</button>
+                                                    <button className="btn btn-ghost" style={{ padding: "0.25rem 0.5rem", color: "var(--color-error)" }} onClick={() => handleDeleteDoc(doc.id)}>🗑️</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
+            )
+            }
+        </div >
     );
 }

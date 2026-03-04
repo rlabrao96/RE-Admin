@@ -1,7 +1,8 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, ConfigDict
+from typing import Optional
 from datetime import date
 from uuid import UUID
+
 
 class ExpenseBase(BaseModel):
     concept: str
@@ -10,23 +11,21 @@ class ExpenseBase(BaseModel):
     category: str
     period: str
 
+
 class ExpenseCreate(ExpenseBase):
     building_id: UUID
 
-class ExpenseUpdate(BaseModel):
+
+class ExpenseUpdate(ExpenseBase):
     id: Optional[UUID] = None
-    concept: str
-    amount_clp: int
-    expense_date: date
-    category: str
-    period: str
+
 
 class ExpenseResponse(ExpenseBase):
     id: UUID
     building_id: UUID
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
 
 class ExpenseCopyRequest(BaseModel):
     building_id: UUID

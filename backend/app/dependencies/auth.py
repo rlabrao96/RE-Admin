@@ -88,21 +88,16 @@ async def require_admin(auth_data=Depends(get_current_user)):
             
     return MockUser(user, token)
 
-async def require_resident(user=Depends(get_current_user)):
+async def require_resident(
+    auth_data=Depends(get_current_user),
+    supabase_client: Client = Depends(get_supabase_client)
+):
     """Return the resident record for the current user."""
-    # Note: We still need to query the residents table which likely has RLS.
-    # We will use the publishable key but we MUST set the token on the client.
-    # However, since we are already authenticated as the user in the JWT,
-    # Supabase PostgREST will respect the Authorization header if we pass it.
-    
-    # For now, let's use the same scoped approach if possible or just use psycopg2
-    # but to keep it simple, let's try setting the token on the global client.
-    supabase.postgrest.auth(user.get("id")) # This is just a placeholder, real way is:
-    
-    # Actually, the best way without a real service key is to create a client per request
+    user = auth_data["user"]
     user_id = user.get("id")
+    
     resident = (
-        supabase.table("residents")
+        supabase_client.table("residents")
         .select("*")
         .eq("user_id", user_id)
         .eq("status", "active")

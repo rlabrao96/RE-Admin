@@ -60,12 +60,14 @@ export default async function AdminDashboard() {
                     label="Edificios"
                     value={String(buildingsCount ?? 0)}
                     icon={<span style={{ fontSize: "1.125rem" }}>🏢</span>}
+                    href="/admin/buildings"
                 />
                 <StatCard
                     label="Cobros Pendientes"
                     value={String(pendingCharges ?? 0)}
                     trendPositive={false}
                     icon={<span style={{ fontSize: "1.125rem" }}>📋</span>}
+                    href="/admin/charges"
                 />
                 <StatCard
                     label="Recaudado este Mes"
@@ -73,12 +75,14 @@ export default async function AdminDashboard() {
                     trend="este mes"
                     trendPositive={true}
                     icon={<span style={{ fontSize: "1.125rem" }}>💰</span>}
+                    href="/admin/charges"
                 />
                 <StatCard
                     label="Por Conciliar"
                     value={String(pendingPayments ?? 0)}
                     trendPositive={false}
                     icon={<span style={{ fontSize: "1.125rem" }}>🔍</span>}
+                    href="/admin/reconciliation"
                 />
             </div>
 

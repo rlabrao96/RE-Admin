@@ -8,6 +8,7 @@ const navItems = [
     { href: "/portal/charges", label: "Mis Gastos Comunes", icon: "📋" },
     { href: "/portal/payments", label: "Mis Pagos", icon: "💳" },
     { href: "/portal/notifications", label: "Comunicados", icon: "🔔" },
+    { href: "/portal/polls", label: "Votaciones", icon: "🗳" },
     { href: "/portal/documents", label: "Documentos", icon: "📁" },
 ];
 

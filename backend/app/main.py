@@ -10,29 +10,37 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:3001"],
+    allow_origins=[settings.FRONTEND_URL, "http://localhost:3001", "http://localhost:3000"],
+    allow_origin_regex=r"https://.*\.fintoc\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-from app.routers.buildings import router as buildings_router, router_floors
+from app.routers.buildings import router as buildings_router, router_floors, router_units
 from app.routers.charges import router as charges_router
 from app.routers.payments import router as payments_router
 from app.routers.notifications import router as notifications_router
 from app.routers.webpay import router as webpay_router
 from app.routers.residents import router as residents_router
 from app.routers import expenses
+from app.routers.fintoc import router as fintoc_router
+from app.routers.documents import router as documents_router
+from app.routers.polls import router as polls_router
 
 app.include_router(buildings_router)
 app.include_router(router_floors)
+app.include_router(router_units)
 app.include_router(charges_router)
 app.include_router(payments_router)
 app.include_router(notifications_router)
 app.include_router(webpay_router)
 app.include_router(residents_router)
 app.include_router(expenses.router, prefix="/api")
+app.include_router(fintoc_router, prefix="/api")
+app.include_router(documents_router)
+app.include_router(polls_router)
 
 
 import traceback

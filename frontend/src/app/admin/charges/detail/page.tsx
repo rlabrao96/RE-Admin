@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense, useMemo } from "react";
+import { useState, Suspense, useMemo } from "react";
+import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useBuilding } from "@/hooks/api/useBuilding";
 import { useCharges, useUpdateChargeStatus, Charge } from "@/hooks/api/useCharges";
 import { useChargeSummaries } from "@/hooks/api/useChargeSummaries";
+import { useUnits } from "@/hooks/api/useUnits";
 
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -28,7 +30,11 @@ function ChargesDetailContent() {
 
     const { data: building } = useBuilding(buildingId);
     const { data: charges = [], isLoading: chargesLoading, refetch: refetchCharges } = useCharges(buildingId, period);
-    const { data: summaries = [] } = useChargeSummaries();
+    // Filtered to this building only — shared cache key, no extra network request
+    const { data: summaries = [] } = useChargeSummaries(buildingId);
+    // Units pre-loaded from cache — avoids raw fetch when the fine modal opens
+    const { data: floorsData = [] } = useUnits(buildingId);
+    const buildingUnits = useMemo(() => floorsData.flatMap(f => f.units), [floorsData]);
 
     const updateStatus = useUpdateChargeStatus();
 
@@ -37,7 +43,6 @@ function ChargesDetailContent() {
     // Modal state
     const [showFineModal, setShowFineModal] = useState(false);
     const [utmValue, setUtmValue] = useState<number | null>(null);
-    const [buildingUnits, setBuildingUnits] = useState<any[]>([]);
     const [fineForm, setFineForm] = useState({
         unit_id: "",
         concept: "Multa - Reglas de Copropiedad",
@@ -48,16 +53,34 @@ function ChargesDetailContent() {
     });
     const [creatingFine, setCreatingFine] = useState(false);
     const isArchived = useMemo(() => {
-        if (!buildingId || !period || summaries.length === 0) return false;
-        const bSummaries = summaries.filter((s: any) => String(s.building_id) === String(buildingId));
-        if (bSummaries.length > 0) {
-            const latest = bSummaries.reduce((max: string, s: any) => s.period > max ? s.period : max, "");
-            return period < latest;
-        }
-        return false;
-    }, [summaries, buildingId, period]);
+        if (!period || summaries.length === 0) return false;
+        const latest = summaries.reduce((max: string, s: any) => s.period > max ? s.period : max, "");
+        return period < latest;
+    }, [summaries, period]);
 
     const loading = chargesLoading;
+
+    const handlePeriodChange = (delta: number) => {
+        if (!period) return;
+        const [year, month] = period.split("-").map(Number);
+        const date = new Date(year, month - 1 + delta, 1);
+        const newPeriod = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, "0")}`;
+
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("period", newPeriod);
+        router.push(`${window.location.pathname}?${params.toString()}`);
+    };
+
+    const periodLabel = useMemo(() => {
+        if (!period) return "";
+        const [year, month] = period.split("-").map(Number);
+        const date = new Date(year, month - 1, 1);
+        return date.toLocaleDateString('es-CL', { month: 'long', year: 'numeric' });
+    }, [period]);
+
+    const hasDataForPeriod = useMemo(() => {
+        return charges.some(c => c.period === period);
+    }, [charges, period]);
 
     async function handleTogglePaid(chargeIds: string[], currentStatus: string) {
         const newStatus = currentStatus === "paid" ? "pending" : "paid";
@@ -66,11 +89,15 @@ function ChargesDetailContent() {
 
     async function handleOpenFineModal() {
         setShowFineModal(true);
-        // Set default due_date to end of month for the given period
+        // Set default due_date and pre-select first unit from cached data
         if (period) {
             const [year, month] = period.split("-");
             const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
-            setFineForm(prev => ({ ...prev, due_date: `${period}-${lastDay}` }));
+            setFineForm(prev => ({
+                ...prev,
+                due_date: `${period}-${lastDay}`,
+                unit_id: prev.unit_id || buildingUnits[0]?.id || "",
+            }));
         }
 
         try {
@@ -79,24 +106,6 @@ function ChargesDetailContent() {
             setUtmValue(data.serie[0].valor);
         } catch (e) {
             console.error("Failed to fetch UTM", e);
-        }
-
-        if (buildingUnits.length === 0) {
-            const supabase = createClient();
-            const { data: { session } } = await supabase.auth.getSession();
-            if (session && buildingId) {
-                const res = await fetch(`${API_URL}/api/buildings/${buildingId}/units`, {
-                    headers: { Authorization: `Bearer ${session.access_token}` }
-                });
-                if (res.ok) {
-                    const floors = await res.json();
-                    const allUnits = floors.flatMap((f: any) => f.units);
-                    setBuildingUnits(allUnits);
-                    if (allUnits.length > 0) {
-                        setFineForm(prev => ({ ...prev, unit_id: allUnits[0].id }));
-                    }
-                }
-            }
         }
     };
 
@@ -140,26 +149,52 @@ function ChargesDetailContent() {
 
     return (
         <div>
-            <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div>
-                    <button className="btn btn-ghost" onClick={() => router.push("/admin/charges")} style={{ marginBottom: "0.5rem", padding: "0" }}>
-                        ← Volver al resumen
-                    </button>
-                    <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-                        <h1 className="page-title" style={{ marginBottom: 0 }}>Detalle de Cobros</h1>
-                        {isArchived && (
-                            <span className="badge" style={{ background: "var(--color-gray-200)", color: "var(--color-gray-700)", fontSize: "0.7rem" }}>
-                                ARCHIVO / SOLO LECTURA
+            <div className="page-header" style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "1rem" }}>
+                <button className="btn btn-ghost" onClick={() => router.push("/admin/charges")} style={{ alignSelf: "flex-start", padding: "0", height: "auto" }}>
+                    ← Volver al resumen
+                </button>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", width: "100%" }}>
+                    <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+                            <h1 className="page-title" style={{ marginBottom: 0 }}>Detalle de Cobros</h1>
+                            {isArchived && (
+                                <span className="badge" style={{ background: "var(--color-gray-200)", color: "var(--color-gray-700)", fontSize: "0.7rem", verticalAlign: "middle" }}>
+                                    ARCHIVO / SOLO LECTURA
+                                </span>
+                            )}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.25rem" }}>
+                            <span style={{ color: "var(--color-gray-500)", fontWeight: 500 }}>
+                                {buildingName || "Cargando..."}
                             </span>
-                        )}
+                            <span style={{ color: "var(--color-gray-300)" }}>|</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                                <button
+                                    className="btn btn-icon btn-ghost"
+                                    onClick={() => handlePeriodChange(-1)}
+                                    style={{ padding: "2px" }}
+                                    title="Mes anterior"
+                                >
+                                    <ChevronLeft size={18} />
+                                </button>
+                                <span style={{ fontWeight: 600, color: "var(--color-primary)", minWidth: "100px", textAlign: "center", textTransform: "capitalize" }}>
+                                    {periodLabel}
+                                </span>
+                                <button
+                                    className="btn btn-icon btn-ghost"
+                                    onClick={() => handlePeriodChange(1)}
+                                    style={{ padding: "2px" }}
+                                    title="Mes siguiente"
+                                >
+                                    <ChevronRight size={18} />
+                                </button>
+                            </div>
+                        </div>
                     </div>
-                    <p className="page-subtitle">
-                        {buildingName || "Cargando..."} — Período {period}
-                    </p>
-                </div>
-                <div>
-                    <button className="btn btn-primary" onClick={handleOpenFineModal} disabled={isArchived}>
-                        ➕ Aplicar Multa / Cobro Individual
+
+                    <button className="btn btn-primary" onClick={handleOpenFineModal} disabled={isArchived} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <Plus size={18} /> Aplicar Multa / Cobro Individual
                     </button>
                 </div>
             </div>
@@ -167,6 +202,19 @@ function ChargesDetailContent() {
             <div className="table-wrapper">
                 {loading ? (
                     <p style={{ padding: "2rem", textAlign: "center", color: "var(--color-gray-500)" }}>Cargando detalles...</p>
+                ) : !hasDataForPeriod ? (
+                    <div style={{ padding: "4rem 2rem", textAlign: "center", background: "var(--color-gray-50)", borderRadius: "var(--radius-lg)", border: "1px dashed var(--color-gray-300)", margin: "1rem 0" }}>
+                        <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>📅</div>
+                        <h3 style={{ fontWeight: 600, color: "var(--color-gray-700)", marginBottom: "0.5rem", fontSize: "1.25rem" }}>No hay cobros para este período</h3>
+                        <p style={{ color: "var(--color-gray-500)", maxWidth: "450px", margin: "0 auto", fontSize: "0.95rem", lineHeight: "1.5" }}>
+                            Aún no se han generado gastos comunes ni cobros individuales para <strong>{periodLabel}</strong> en este edificio.
+                        </p>
+                        {!isArchived && (
+                            <button className="btn btn-outline" onClick={handleOpenFineModal} style={{ marginTop: "1.5rem" }}>
+                                <Plus size={18} /> Aplicar primer cobro del mes
+                            </button>
+                        )}
+                    </div>
                 ) : charges.length === 0 ? (
                     <div style={{ padding: "3rem", textAlign: "center" }}>
                         <p style={{ color: "var(--color-gray-500)" }}>No se encontraron cobros para este período.</p>

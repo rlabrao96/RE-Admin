@@ -29,25 +29,33 @@ export function useCharges(buildingId: string | null, period: string | null) {
     return useQuery<Charge[]>({
         queryKey: ["charges", buildingId, period],
         queryFn: async () => {
-            if (!buildingId || !period) return [];
+            if (!buildingId) return [];
             const supabase = createClient();
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) throw new Error("No session");
 
-            // Fetch current period charges
-            const resCurr = await fetch(`${API_URL}/api/charges/?building_id=${buildingId}&period=${period}`, {
-                headers: { Authorization: `Bearer ${session.access_token}` },
-            });
+            // If no period, fetch ALL charges for this building (for reports/debt analysis)
+            if (!period) {
+                const res = await fetch(`${API_URL}/api/charges/?building_id=${buildingId}`, {
+                    headers: { Authorization: `Bearer ${session.access_token}` },
+                });
+                if (!res.ok) throw new Error("Failed to fetch all charges");
+                return res.json();
+            }
 
-            // Fetch ALL past charges for this building to accurately reconstruct past debt
-            const resPast = await fetch(`${API_URL}/api/charges/?building_id=${buildingId}`, {
-                headers: { Authorization: `Bearer ${session.access_token}` },
-            });
+            // Fetch current period charges AND all past charges in parallel
+            const [resCurr, resPast] = await Promise.all([
+                fetch(`${API_URL}/api/charges/?building_id=${buildingId}&period=${period}`, {
+                    headers: { Authorization: `Bearer ${session.access_token}` },
+                }),
+                fetch(`${API_URL}/api/charges/?building_id=${buildingId}`, {
+                    headers: { Authorization: `Bearer ${session.access_token}` },
+                }),
+            ]);
 
             if (!resCurr.ok || !resPast.ok) throw new Error("Failed to fetch charges");
 
-            const dataCurr = await resCurr.json();
-            const dataPast = await resPast.json();
+            const [dataCurr, dataPast] = await Promise.all([resCurr.json(), resPast.json()]);
 
             // Helper: A past charge counts as debt for the CURRENT viewed period if it 
             // was unpaid at the time this period started.
@@ -68,7 +76,8 @@ export function useCharges(buildingId: string | null, period: string | null) {
 
             return [...dataCurr, ...activePastCharges];
         },
-        enabled: !!buildingId && !!period,
+        enabled: !!buildingId,
+        staleTime: 1000 * 60 * 3, // 3 minutes — charges change frequently
     });
 }
 

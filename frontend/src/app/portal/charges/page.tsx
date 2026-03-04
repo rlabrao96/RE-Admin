@@ -51,17 +51,23 @@ export default async function PortalChargesPage() {
             {/* Pending Consolidation */}
             {pending.length > 0 && (() => {
                 const now = new Date();
-                const currentPeriod = now.toISOString().slice(0, 7);
+
+                // Group charges to identify current vs pending
+                const sortedPending = [...pending].sort((a, b) => b.period.localeCompare(a.period));
+                const latestPeriod = sortedPending.find(c => {
+                    const concept = (c.concept || "").toLowerCase();
+                    return !concept.includes("multa") && !concept.includes("interes") && !concept.includes("interés");
+                })?.period;
 
                 const summary = pending.reduce((acc: any, c: any) => {
                     const concept = (c.concept || "").toLowerCase();
-                    const isCurrent = c.period === currentPeriod;
+                    const isLatest = c.period === latestPeriod;
 
                     if (concept.includes("multa") || concept.includes("individual")) {
                         acc.multas += c.amount_clp;
                     } else if (concept.includes("interes") || concept.includes("interés")) {
                         acc.intereses += c.amount_clp;
-                    } else if (isCurrent) {
+                    } else if (isLatest) {
                         acc.gastoComun += c.amount_clp;
                     } else {
                         acc.gastosPendientes += c.amount_clp;
@@ -70,6 +76,13 @@ export default async function PortalChargesPage() {
                     acc.ids.push(c.id);
                     return acc;
                 }, { gastoComun: 0, gastosPendientes: 0, multas: 0, intereses: 0, total: 0, ids: [] });
+
+                const formatMonth = (periodStr: string) => {
+                    if (!periodStr) return "";
+                    const [year, month] = periodStr.split("-");
+                    const date = new Date(parseInt(year), parseInt(month) - 1, 1);
+                    return date.toLocaleDateString("es-CL", { month: "long", year: "numeric" }).replace(/^\w/, (c) => c.toUpperCase());
+                };
 
                 return (
                     <div style={{ marginBottom: "2rem" }}>
@@ -83,7 +96,7 @@ export default async function PortalChargesPage() {
                                     <div style={{ fontSize: "2rem", fontWeight: 700, color: "var(--color-primary)" }}>{formatCLP(summary.total)}</div>
                                 </div>
                                 <a
-                                    href={`/portal/payments/pay?charge_id=${summary.ids[0]}&charge_ids=${summary.ids.join(",")}&amount=${summary.total}`}
+                                    href={`/portal/payments/pay?charge_ids=${summary.ids.join(",")}&amount=${summary.total}`}
                                     className="btn btn-primary btn-lg"
                                 >
                                     💳 Pagar Todo
@@ -95,7 +108,7 @@ export default async function PortalChargesPage() {
                                 <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                                     {summary.gastoComun > 0 && (
                                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.875rem" }}>
-                                            <span>Gasto Común ({currentPeriod})</span>
+                                            <span>Gasto Común {latestPeriod ? `(${formatMonth(latestPeriod)})` : ""}</span>
                                             <span>{formatCLP(summary.gastoComun)}</span>
                                         </div>
                                     )}

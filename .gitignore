@@ -15,10 +15,25 @@ frontend/frontend.pid
 **/__pycache__/
 *.pyc
 
-# Debug files
+# Debug / one-off scripts (not needed to run the app)
 backend/debug_summary.py
 backend/test_auth.py
+backend/test_put_*.py
 test_backend.py
+backend/check_*.py
+backend/backfill_*.py
+backend/clear_*.py
+backend/consolidate_*.py
+backend/find_*.py
+backend/full_*.py
+backend/minimal_*.py
+backend/seed_*.py
+
+# Test / sample data
+dummy_units.xlsx
+
+# Build artifacts
+frontend/tsconfig.tsbuildinfo
 
 # Supabase CLI binary & temp
 supabase-cli

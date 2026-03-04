@@ -20,5 +20,6 @@ export function useBuilding(buildingId: string | null) {
             return res.json();
         },
         enabled: !!buildingId,
+        staleTime: 1000 * 60 * 30, // 30 minutes
     });
 }

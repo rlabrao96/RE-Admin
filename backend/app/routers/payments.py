@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
-from app.dependencies.auth import require_admin, supabase
+from app.dependencies.auth import require_admin, get_supabase_client
+from supabase import Client
 from app.schemas.payment import ManualPaymentCreate, ReconcileRequest
 from datetime import datetime, timezone
 
@@ -12,6 +13,7 @@ async def list_payments(
     reconciliation_status: str | None = None,
     period: str | None = None,
     user=Depends(require_admin),
+    supabase: Client = Depends(get_supabase_client),
 ):
     """List all payments for the admin's buildings with optional filters."""
     query = supabase.table("payments").select(
@@ -37,53 +39,66 @@ async def list_payments(
 
 
 @router.post("/manual", status_code=201)
-async def record_manual_payment(data: ManualPaymentCreate, user=Depends(require_admin)):
+async def record_manual_payment(
+    data: ManualPaymentCreate, 
+    user=Depends(require_admin),
+    supabase: Client = Depends(get_supabase_client),
+):
     """Record a manual payment (e.g. bank transfer) directly by the admin."""
-    # Get the charge to find the resident
-    charge = (
+    # Find active resident (using the first charge to identify the unit)
+    first_charge = (
         supabase.table("charges")
-        .select("id, unit_id, status")
-        .eq("id", str(data.charge_id))
+        .select("unit_id")
+        .eq("id", str(data.charge_ids[0]))
         .maybe_single()
         .execute()
     )
-    if not charge.data:
+    if not first_charge.data:
         raise HTTPException(status_code=404, detail="Charge not found")
 
-    # Find active resident for the unit
     resident = (
         supabase.table("residents")
         .select("id")
-        .eq("unit_id", charge.data["unit_id"])
+        .eq("unit_id", first_charge.data["unit_id"])
         .eq("status", "active")
         .maybe_single()
         .execute()
     )
     resident_id = resident.data["id"] if resident.data else None
 
-    # Create payment record
-    result = supabase.table("payments").insert({
-        "charge_id": str(data.charge_id),
-        "resident_id": resident_id,
-        "amount_clp": data.amount_clp,
-        "payment_method": data.payment_method,
-        "status": "completed",
-        "reconciliation_status": "reconciled",  # Manual = already reconciled
-        "paid_at": datetime.now(timezone.utc).isoformat(),
-        "reconciled_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+    results = []
+    # Create a payment record per charge
+    for c_id in data.charge_ids:
+        # Get individual charge amount if amount_clp wasn't split
+        # For simplicity, we assume the total amount matches the sum of charges
+        charge_info = supabase.table("charges").select("amount_clp").eq("id", str(c_id)).maybe_single().execute()
+        
+        result = supabase.table("payments").insert({
+            "charge_id": str(c_id),
+            "resident_id": resident_id,
+            "amount_clp": charge_info.data["amount_clp"] if charge_info.data else 0,
+            "payment_method": data.payment_method,
+            "status": "completed",
+            "reconciliation_status": "reconciled",
+            "paid_at": datetime.now(timezone.utc).isoformat(),
+            "reconciled_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+        
+        if result.data:
+            supabase.table("charges").update({"status": "paid"}).eq("id", str(c_id)).execute()
+            results.append(result.data[0])
 
-    if not result.data:
-        raise HTTPException(status_code=500, detail="Failed to record payment")
+    if not results:
+        raise HTTPException(status_code=500, detail="Failed to record payments")
 
-    # Mark charge as paid
-    supabase.table("charges").update({"status": "paid"}).eq("id", str(data.charge_id)).execute()
-
-    return result.data[0]
+    return results[0]  # Return the first one for compatibility
 
 
 @router.get("/pending-reconciliation")
-async def get_pending_reconciliation(user=Depends(require_admin)):
+async def get_pending_reconciliation(
+    user=Depends(require_admin),
+    supabase: Client = Depends(get_supabase_client),
+):
     """Returns payments that need manual reconciliation (status=completed, reconciliation_status=pending)."""
     result = supabase.table("payments").select(
         "*, charges(concept, period, amount_clp, units(number, floors(building_id, buildings(name, admin_id)))), residents(profiles(full_name))"
@@ -96,7 +111,11 @@ async def get_pending_reconciliation(user=Depends(require_admin)):
 
 
 @router.post("/reconcile")
-async def reconcile_payment(data: ReconcileRequest, user=Depends(require_admin)):
+async def reconcile_payment(
+    data: ReconcileRequest, 
+    user=Depends(require_admin),
+    supabase: Client = Depends(get_supabase_client),
+):
     """Mark a pending payment as reconciled."""
     result = supabase.table("payments").update({
         "reconciliation_status": "reconciled",

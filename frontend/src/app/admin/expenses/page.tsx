@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { getExpenses, saveExpenses, copyExpenses, Expense } from "@/lib/expenses-api";
 import { useBuildings, Building } from "@/hooks/api/useBuildings";
@@ -23,7 +24,7 @@ export default function ExpensesPage() {
     const [buildingId, setBuildingId] = useState("");
     const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
 
-    const { data: initialExpenses = [], isLoading: loading, refetch: refetchExpenses } = useExpenses(buildingId, period);
+    const { data: initialExpenses, isLoading: loading, refetch: refetchExpenses } = useExpenses(buildingId, period);
 
     const [expenses, setExpenses] = useState<Expense[]>([]);
     const [saving, setSaving] = useState(false);
@@ -31,9 +32,18 @@ export default function ExpensesPage() {
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
 
+    const handleMonthChange = (delta: number) => {
+        const [year, month] = period.split("-").map(Number);
+        const date = new Date(year, month - 1 + delta, 1);
+        const newPeriod = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, "0")}`;
+        setPeriod(newPeriod);
+    };
+
     // Sync initial query data to local state for editing
     useEffect(() => {
-        setExpenses(initialExpenses);
+        if (initialExpenses) {
+            setExpenses(initialExpenses);
+        }
     }, [initialExpenses]);
 
     const fetchExpenses = useCallback(async () => {
@@ -185,7 +195,31 @@ export default function ExpensesPage() {
                     </div>
                     <div className="form-group">
                         <label className="form-label">Periodo</label>
-                        <input className="form-input" type="month" value={period} onChange={e => setPeriod(e.target.value)} />
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            <button
+                                className="btn btn-outline"
+                                style={{ padding: "0.5rem", minWidth: "auto", height: "100%" }}
+                                onClick={() => handleMonthChange(-1)}
+                                title="Mes anterior"
+                            >
+                                <ChevronLeft size={20} />
+                            </button>
+                            <input
+                                className="form-input"
+                                type="month"
+                                value={period}
+                                onChange={e => setPeriod(e.target.value)}
+                                style={{ flex: 1 }}
+                            />
+                            <button
+                                className="btn btn-outline"
+                                style={{ padding: "0.5rem", minWidth: "auto", height: "100%" }}
+                                onClick={() => handleMonthChange(1)}
+                                title="Mes siguiente"
+                            >
+                                <ChevronRight size={20} />
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
